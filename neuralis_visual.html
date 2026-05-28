@@ -14,16 +14,21 @@
 <body>
 <script>
 "use strict";
-// ---- canvas di stampa (tutta l'opera vive qui, alla risoluzione finale) ----
-const ART_W = 1772, ART_H = 1181;     // 10x15 cm orizzontale @300 DPI
-const BG = [228, 45, 4];              // fondo scuro (#05060a) in HSB
+// ---- frame artistico in formato TV (16:9): le linee riempiono il rettangolo ---
+// Tutta l'opera vive in questo buffer e viene poi mostrata a pieno schermo sulla
+// TV; l'export di stampa e' lo stesso buffer (1920x1080 ~ 325 DPI su 15 cm).
+const ART_W = 1920, ART_H = 1080;
+const BG = [228, 45, 4];                 // fondo scuro (#05060a) in HSB
 
 let artBuf, ws;
 let warmth = 0.5, activation = 0.4, frozen = false;
-let hasSignature = false, seed = null, arms = 5, phase = 0, hueBase = 0;
-let t = 0;
+let hasSignature = false, seed = null;
 
-// PRNG deterministico: stessa firma -> stessa struttura di base, per persona.
+// Parametri del campo di flusso, derivati dalla firma (unici per persona).
+let particles = [], fieldScale = 0.0012, turnsBase = 1.6, paletteOff = 0, NP = 1000;
+let zoff = 0;
+
+// PRNG deterministico: stessa firma -> stesso campo di base, per persona.
 function mulberry32(a){
   return function(){
     a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -36,10 +41,23 @@ function mulberry32(a){
 function applySignature(s){
   seed = s >>> 0;
   const rng = mulberry32(seed);
-  arms = 3 + Math.floor(rng() * 6);     // 3..8 bracci
-  phase = rng() * TWO_PI;               // fase iniziale
-  hueBase = rng() * 360;                // variazione cromatica di base
+  noiseSeed(seed);                       // forma del campo unica per persona
+  fieldScale = 0.0008 + rng() * 0.0016;  // scala del rumore (struttura)
+  turnsBase  = 1.0 + rng() * 1.6;        // "giri" del campo
+  paletteOff = rng() * 44 - 22;          // sfumatura cromatica personale
+  NP         = 900 + Math.floor(rng() * 600); // densita' di linee
   hasSignature = true;
+  initParticles();
+}
+
+function newParticle(){
+  return { x: Math.random() * ART_W, y: Math.random() * ART_H,
+           life: 0, max: 0, hueJ: Math.random() * 2 - 1 };
+}
+function initParticles(){
+  particles = [];
+  for(let i = 0; i < NP; i++) particles.push(newParticle());
+  clearArt();
 }
 
 function clearArt(){
@@ -55,7 +73,7 @@ function setup(){
   colorMode(HSB, 360, 100, 100, 100);
   artBuf = createGraphics(ART_W, ART_H);
   artBuf.colorMode(HSB, 360, 100, 100, 100);
-  artBuf.pixelDensity(1);              // buffer esattamente 1772x1181 px
+  artBuf.pixelDensity(1);                // buffer esattamente 1920x1080 px
   clearArt();
   noCursor();
   connectWS();
@@ -67,59 +85,44 @@ function draw(){
   background(BG[0], BG[1], BG[2]);
   if(!hasSignature){ drawWaiting(); return; }
   if(!frozen) step(artBuf);
-  // blit "contain": l'opera (1.5:1) centrata sulla TV, bordi col fondo.
+  // blit "contain": il frame 16:9 riempie la TV 16:9 (su monitor diversi, bordi).
   const s = Math.min(width / ART_W, height / ART_H);
   const w = ART_W * s, h = ART_H * s;
   image(artBuf, (width - w) / 2, (height - h) / 2, w, h);
 }
 
-// ---- passo generativo: bracci a spirale che fluiscono ---------------------
+// ---- passo generativo: campo di flusso che riempie tutto il rettangolo ------
+// activation -> LUNGHEZZA linee (calmo = distese/lunghe, attivo = serrate/corte)
+// warmth     -> COLORE (caldo ambra <-> freddo ciano)
 function step(g){
   // Persistenza: velo scuro leggero invece di azzerare -> l'opera si accumula.
   g.noStroke();
-  g.fill(BG[0], BG[1], BG[2], 3.5);
+  g.fill(BG[0], BG[1], BG[2], 3.0);
   g.rect(0, 0, ART_W, ART_H);
 
-  const cx = ART_W / 2, cy = ART_H / 2;
-  const maxR = Math.min(ART_W, ART_H) * 0.46, innerR = 34;
-
-  // Colore: warmth 1 -> ambra (35°, caldo), 0 -> ciano (210°, freddo).
-  const hue = 35 + (1 - warmth) * 175;
   const act = activation;
+  const hue     = 35 + (1 - warmth) * 175;          // 1->ambra(35), 0->ciano(210)
+  const turns   = turnsBase * lerp(0.7, 2.6, act);  // attivo -> campo turbolento
+  const lifeMax = lerp(140, 16, act);               // attivo -> linee corte
+  const spd     = lerp(1.3, 3.2, act);              // attivo -> piu' veloce
+  const sat     = lerp(58, 90, act);                // attivo -> piu' acceso
+  const sw      = lerp(2.4, 1.2, act);
 
-  // Forma: activation basso -> linee distese/morbide; alto -> serrate/curve.
-  const turns    = lerp(1.1, 2.4, act);   // giri di spirale (piu' stretti se attivo)
-  const serrFreq = lerp(2.5, 20, act);    // frequenza di serratura
-  const serrAmp  = lerp(3, 14, act);      // ampiezza di serratura
-  const wander   = lerp(7, 26, act);      // disturbo organico (flow)
-  const rot      = lerp(0.0016, 0.009, act); // velocita' di rotazione
-  const sw       = lerp(3.0, 1.6, act);   // spessore tratto
-
-  g.strokeWeight(sw);
-  g.noFill();
-  const SEG = 220;
-  for(let a = 0; a < arms; a++){
-    const armAng = phase + a * TWO_PI / arms + t;
-    const hh = (((hue + (a - (arms - 1) / 2) * 7 + hueBase * 0.05) % 360) + 360) % 360;
-    g.stroke(hh, 78, 96, 30);
-    g.beginShape();
-    for(let i = 0; i <= SEG; i++){
-      const fr = i / SEG;
-      let r = innerR + fr * (maxR - innerR);
-      const ang = armAng + fr * turns * TWO_PI;
-      r += Math.sin(fr * serrFreq * TWO_PI + t * 2.0 + a) * serrAmp;
-      r += (noise(a * 12.3 + fr * 3.0, t * 0.25) - 0.5) * 2 * wander;
-      g.curveVertex(cx + r * Math.cos(ang), cy + r * Math.sin(ang));
+  for(const p of particles){
+    if(p.max === 0) p.max = lifeMax * (0.6 + Math.random() * 0.8);
+    const ang = noise(p.x * fieldScale, p.y * fieldScale, zoff) * TWO_PI * turns;
+    const nx = p.x + Math.cos(ang) * spd;
+    const ny = p.y + Math.sin(ang) * spd;
+    const hh = (((hue + paletteOff + p.hueJ * 16) % 360) + 360) % 360;
+    g.strokeWeight(sw * 2.6); g.stroke(hh, sat, 72, 9);   g.line(p.x, p.y, nx, ny); // bagliore
+    g.strokeWeight(sw);       g.stroke(hh, sat, 100, 52); g.line(p.x, p.y, nx, ny); // nucleo
+    p.x = nx; p.y = ny; p.life++;
+    if(p.life > p.max || p.x < 0 || p.x > ART_W || p.y < 0 || p.y > ART_H){
+      p.x = Math.random() * ART_W; p.y = Math.random() * ART_H;
+      p.life = 0; p.max = 0; p.hueJ = Math.random() * 2 - 1;
     }
-    g.endShape();
   }
-
-  // Nucleo luminoso tenue, tinta sul colore corrente.
-  g.noStroke();
-  g.fill(hue, 55, 100, 6);
-  g.circle(cx, cy, 120);
-
-  t += rot;
+  zoff += lerp(0.0008, 0.004, act);       // evoluzione lenta/rapida del campo
 }
 
 // ---- schermo di attesa (finche' non arriva la firma) ----------------------
