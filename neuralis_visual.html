@@ -18,6 +18,8 @@
 // Tutta l'opera vive in questo buffer e viene poi mostrata a pieno schermo sulla
 // TV; l'export di stampa e' lo stesso buffer (1920x1080 ~ 325 DPI su 15 cm).
 const ART_W = 1920, ART_H = 1080;
+// Soglie cromatiche (HSB, gradi): caldo -> rosso vivo, freddo -> ciano.
+const HUE_WARM = 2, HUE_COLD = 210;
 
 let artBuf, ws;
 let warmth = 0.5, activation = 0.4, frozen = false;
@@ -63,9 +65,17 @@ function initParticles(){
 // dal mood = warmth), tono scuro che "respira" con l'evoluzione del campo
 // (zoff) e con l'attivazione -> quando le linee si muovono, anche lo sfondo
 // cambia un po'.
+// Tonalita' di base dal mood (warmth): caldo -> rosso vivo, freddo -> ciano.
+// La curva (pow 0.7) sposta un po' la gamma verso il caldo, cosi' il rosso si
+// vede gia' negli stati ben caldi e non solo al picco assoluto.
+function moodHue(){
+  const wc = Math.pow(warmth, 0.7);
+  return HUE_WARM + (1 - wc) * (HUE_COLD - HUE_WARM);
+}
+
 function bgColor(){
-  const hue = (35 + (1 - warmth) * 175 + 6 * Math.sin(zoff * 0.7) + 360) % 360;
-  const sat = 45 + activation * 25;
+  const hue = (moodHue() + 6 * Math.sin(zoff * 0.7) + 360) % 360;
+  const sat = 50 + activation * 25;
   const br  = 9 + 2.5 * Math.sin(zoff * 1.3) + activation * 3;
   return [hue, sat, Math.max(4, br)];
 }
@@ -114,11 +124,11 @@ function step(g, bg){
   g.rect(0, 0, ART_W, ART_H);
 
   const act = activation;
-  const hue     = 35 + (1 - warmth) * 175;          // 1->ambra(35), 0->ciano(210)
+  const hue     = moodHue();                        // caldo->rosso vivo, freddo->ciano
   const turns   = turnsBase * lerp(0.7, 2.6, act);  // attivo -> campo turbolento
   const lifeMax = lerp(140, 16, act);               // attivo -> linee corte
   const spd     = lerp(1.3, 3.2, act);              // attivo -> piu' veloce
-  const sat     = lerp(58, 90, act);                // attivo -> piu' acceso
+  const sat     = lerp(76, 96, act);                // saturazione alta -> colori vivi
   const sw      = lerp(2.4, 1.2, act);
 
   for(const p of particles){
