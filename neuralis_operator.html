@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neuralis — Operatore</title>
+<style>
+  :root{
+    --bg:#0a0c12; --panel:#11141d; --panel2:#161a26; --line:#222838;
+    --txt:#e7ecf5; --muted:#8a93a8; --accent:#6ea8ff;
+    --green:#37d67a; --yellow:#ffcf4a; --red:#ff5d6c;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(1200px 800px at 70% -10%, #131726 0%, var(--bg) 60%);
+    color:var(--txt); font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:22px; -webkit-font-smoothing:antialiased;
+  }
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+  .brand{display:flex;align-items:baseline;gap:10px}
+  .brand h1{font-size:22px;letter-spacing:3px;margin:0;font-weight:700}
+  .brand small{color:var(--muted);letter-spacing:2px;text-transform:uppercase;font-size:11px}
+  .pills{display:flex;gap:10px;align-items:center}
+  .pill{display:flex;align-items:center;gap:8px;padding:7px 14px;border-radius:999px;
+        background:var(--panel);border:1px solid var(--line);font-weight:600;font-size:13px}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--red);box-shadow:0 0 0 0 rgba(255,255,255,0)}
+  .dot.green{background:var(--green)} .dot.yellow{background:var(--yellow)} .dot.red{background:var(--red)}
+  .dot.live{animation:pulse 1.4s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(55,214,122,.5)}70%{box-shadow:0 0 0 9px rgba(55,214,122,0)}100%{box-shadow:0 0 0 0 rgba(55,214,122,0)}}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px}
+  .panel h2{margin:0 0 14px;font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .span2{grid-column:1 / -1}
+
+  /* qualita' segnale */
+  .chans{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .chan{background:var(--panel2);border-radius:12px;padding:12px;text-align:center}
+  .chan .name{font-weight:700;letter-spacing:1px;margin-bottom:10px}
+  .qbar{height:90px;width:18px;margin:0 auto;border-radius:9px;background:#0c0f17;position:relative;overflow:hidden;border:1px solid var(--line)}
+  .qfill{position:absolute;bottom:0;left:0;right:0;background:var(--green);transition:height .25s,background .25s}
+  .chan .qval{margin-top:8px;font-size:12px;color:var(--muted)}
+
+  /* parametri */
+  .param{margin-bottom:16px}
+  .param .row{display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px}
+  .param .row b{font-variant-numeric:tabular-nums}
+  .track{height:14px;border-radius:8px;background:#0c0f17;overflow:hidden;border:1px solid var(--line)}
+  .fill{height:100%;width:0;transition:width .3s,background .3s;border-radius:8px}
+  .bands{display:grid;gap:8px}
+  .band{display:grid;grid-template-columns:60px 1fr 52px;align-items:center;gap:10px;font-size:13px}
+  .band .bt{height:10px;border-radius:6px;background:#0c0f17;overflow:hidden;border:1px solid var(--line)}
+  .band .bf{height:100%;width:0;background:var(--accent);transition:width .3s}
+  .big-nums{display:flex;gap:26px;flex-wrap:wrap;margin-top:4px}
+  .num .k{color:var(--muted);font-size:11px;letter-spacing:1px;text-transform:uppercase}
+  .num .v{font-size:30px;font-weight:700;font-variant-numeric:tabular-nums}
+  .num .u{color:var(--muted);font-size:14px;font-weight:500}
+
+  /* azioni */
+  .actions{display:grid;grid-template-columns:1.3fr 1.3fr 1fr 1fr;gap:14px;margin-top:4px}
+  button{font:inherit;font-weight:700;letter-spacing:1px;color:var(--txt);border:1px solid var(--line);
+         background:var(--panel2);border-radius:14px;padding:22px 14px;cursor:pointer;transition:.15s;text-transform:uppercase}
+  button:hover{transform:translateY(-1px);border-color:#3a4660}
+  button:active{transform:translateY(0)}
+  button:disabled{opacity:.4;cursor:not-allowed;transform:none}
+  .btn-freeze{background:linear-gradient(180deg,#1d2640,#141a2c);border-color:#2f3b5e}
+  .btn-freeze.on{background:linear-gradient(180deg,#3a2a12,#2a1f0e);border-color:#7a5a20;color:#ffd27a}
+  .btn-print{background:linear-gradient(180deg,#123a24,#0e2a1b);border-color:#2a7a4a;font-size:18px}
+  .btn-sec{font-size:13px;padding:22px 10px}
+  .badge{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:999px;font-size:12px;font-weight:700;
+         background:#2a1f0e;border:1px solid #7a5a20;color:var(--yellow)}
+  .feedback{margin-top:16px;min-height:24px;font-weight:600}
+  .feedback.ok{color:var(--green)} .feedback.info{color:var(--accent)} .feedback.err{color:var(--red)}
+  .hint{color:var(--muted);font-size:12px;font-weight:500}
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>NEURALIS</h1><small>Console operatore</small>
+    </div>
+    <div class="pills">
+      <div class="pill"><span id="museDot" class="dot red"></span><span id="museTxt">Muse non connesso</span></div>
+      <div class="pill"><span id="srvDot" class="dot red"></span><span id="srvTxt">Server offline</span></div>
+    </div>
+  </header>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>Qualità segnale</h2>
+      <div class="chans" id="chans"></div>
+      <p class="hint" id="sigHint" style="margin-top:14px">In attesa del segnale…</p>
+    </section>
+
+    <section class="panel">
+      <h2>Parametri live</h2>
+      <div class="param">
+        <div class="row"><span>Warmth <span class="hint">(caldo ↔ freddo)</span></span><b id="warmthV">—</b></div>
+        <div class="track"><div class="fill" id="warmthBar"></div></div>
+      </div>
+      <div class="param">
+        <div class="row"><span>Activation <span class="hint">(disteso ↔ serrato)</span></span><b id="actV">—</b></div>
+        <div class="track"><div class="fill" id="actBar" style="background:linear-gradient(90deg,#3aa0ff,#ff5d6c)"></div></div>
+      </div>
+      <div class="big-nums">
+        <div class="num"><div class="k">IAF</div><div class="v"><span id="iafV">—</span><span class="u"> Hz</span></div></div>
+        <div class="num"><div class="k">Asimmetria</div><div class="v" id="asymV">—</div></div>
+        <div class="num"><div class="k">Seed firma</div><div class="v" id="seedV" style="font-size:22px">—</div></div>
+      </div>
+    </section>
+
+    <section class="panel span2">
+      <h2>Potenze di banda</h2>
+      <div class="bands" id="bands"></div>
+    </section>
+
+    <section class="panel span2">
+      <h2 style="display:flex;justify-content:space-between;align-items:center">
+        <span>Controlli</span>
+        <span id="frozenBadge" style="display:none" class="badge"><span class="dot yellow live"></span>QUADRO CONGELATO</span>
+      </h2>
+      <div class="actions">
+        <button id="btnFreeze" class="btn-freeze">Congela</button>
+        <button id="btnPrint" class="btn-print">Stampa</button>
+        <button id="btnNew" class="btn-sec">Nuova sessione</button>
+        <button id="btnClear" class="btn-sec">Pulisci</button>
+      </div>
+      <p class="hint" style="margin-top:12px">Flusso: <b>Congela</b> il quadro, mostralo e spiegalo, poi <b>Stampa</b>.</p>
+      <div class="feedback" id="feedback"></div>
+    </section>
+  </div>
+
+<script>
+  "use strict";
+  const CHANNELS = ["TP9","AF7","AF8","TP10"];
+  const BANDS = ["delta","theta","alpha","beta","gamma"];
+  const WS_URL = new URLSearchParams(location.search).get("ws") || "ws://127.0.0.1:8765";
+
+  let ws = null, frozen = false;
+
+  // ---- costruzione UI dinamica ----
+  const chansEl = document.getElementById("chans");
+  CHANNELS.forEach(c=>{
+    chansEl.insertAdjacentHTML("beforeend",
+      `<div class="chan"><div class="name">${c}</div>
+       <div class="qbar"><div class="qfill" id="q_${c}"></div></div>
+       <div class="qval" id="qv_${c}">—</div></div>`);
+  });
+  const bandsEl = document.getElementById("bands");
+  BANDS.forEach(b=>{
+    bandsEl.insertAdjacentHTML("beforeend",
+      `<div class="band"><span style="text-transform:capitalize">${b}</span>
+       <div class="bt"><div class="bf" id="bf_${b}"></div></div>
+       <span id="bv_${b}" style="text-align:right;color:var(--muted)">—</span></div>`);
+  });
+
+  // ---- helper UI ----
+  const $ = id => document.getElementById(id);
+  function setDot(el,cls,live){ el.className = "dot " + cls + (live?" live":""); }
+  function qColor(q){ return q>=0.8?"var(--green)":q>=0.5?"var(--yellow)":"var(--red)"; }
+  function fb(text,kind){ const f=$("feedback"); f.textContent=text; f.className="feedback "+(kind||""); }
+
+  function setMuseState(s){
+    const dot=$("museDot"), txt=$("museTxt");
+    if(s==="connected"){ setDot(dot,"green",true); txt.textContent="Muse connesso"; }
+    else if(s==="connecting"){ setDot(dot,"yellow",true); txt.textContent="Connessione…"; }
+    else { setDot(dot,"red",false); txt.textContent="Muse non connesso"; }
+  }
+
+  function updateFeatures(m){
+    setMuseState(m.muse_state);
+    // qualita' segnale
+    let anyGood=false;
+    CHANNELS.forEach(c=>{
+      const q = (m.signal_quality && m.signal_quality[c]!=null) ? m.signal_quality[c] : 0;
+      if(q>=0.5) anyGood=true;
+      const f=$("q_"+c); f.style.height=(q*100)+"%"; f.style.background=qColor(q);
+      $("qv_"+c).textContent = Math.round(q*100)+"%";
+    });
+    $("sigHint").textContent = anyGood ? "Segnale presente." : "Contatto scarso: sistema la fascia.";
+
+    // warmth con hue coerente alla TV (1->ambra 35°, 0->ciano 210°)
+    const w = m.warmth ?? 0;
+    const hue = 210 - w*175;
+    $("warmthBar").style.width = (w*100)+"%";
+    $("warmthBar").style.background = `hsl(${hue},85%,55%)`;
+    $("warmthV").textContent = w.toFixed(2);
+
+    const a = m.activation ?? 0;
+    $("actBar").style.width = (a*100)+"%";
+    $("actV").textContent = a.toFixed(2);
+
+    $("iafV").textContent = (m.iaf!=null)? m.iaf.toFixed(1) : "—";
+    $("asymV").textContent = (m.asymmetry!=null)? m.asymmetry.toFixed(2) : "—";
+    $("seedV").textContent = m.signature ? m.signature.seed : "in cattura…";
+
+    if(m.powers){
+      BANDS.forEach(b=>{
+        const v = m.powers[b] ?? 0;
+        $("bf_"+b).style.width = Math.min(100, v*100)+"%";
+        $("bv_"+b).textContent = (v*100).toFixed(0)+"%";
+      });
+    }
+    setFrozen(!!m.frozen);
+  }
+
+  function setFrozen(f){
+    frozen=f;
+    $("frozenBadge").style.display = f? "inline-flex":"none";
+    const b=$("btnFreeze");
+    b.textContent = f? "Riprendi" : "Congela";
+    b.classList.toggle("on", f);
+  }
+
+  function showPrintResult(m){
+    if(m.ok && m.printed) fb("Stampato su "+(m.printer||"stampante")+".","ok");
+    else if(m.ok && !m.printed) fb("Quadro salvato: "+(m.saved||"file")+" — stampa non ancora attiva.","info");
+    else fb("Errore stampa: "+(m.error||"sconosciuto"),"err");
+  }
+
+  // ---- WebSocket con riconnessione ----
+  function connect(){
+    ws = new WebSocket(WS_URL);
+    ws.onopen = ()=>{ setDot($("srvDot"),"green",true); $("srvTxt").textContent="Server connesso";
+                      ws.send(JSON.stringify({type:"hello", role:"operator"})); };
+    ws.onmessage = e=>{ let m; try{m=JSON.parse(e.data)}catch{ return; }
+                        if(m.type==="features") updateFeatures(m);
+                        else if(m.type==="print_result") showPrintResult(m); };
+    ws.onclose = ()=>{ setDot($("srvDot"),"red",false); $("srvTxt").textContent="Server offline";
+                       setMuseState("disconnected"); setTimeout(connect,1500); };
+    ws.onerror = ()=>{ try{ws.close()}catch{} };
+  }
+  function send(cmd){
+    if(ws && ws.readyState===WebSocket.OPEN){ ws.send(JSON.stringify({cmd})); return true; }
+    fb("Comando non inviato: server offline.","err"); return false;
+  }
+
+  // ---- pulsanti (no <form>, solo handler JS) ----
+  $("btnFreeze").addEventListener("click", ()=>{ if(send("freeze")) fb(frozen?"Riprendo…":"Congelo il quadro…","info"); });
+  $("btnPrint").addEventListener("click", ()=>{ if(send("print")) fb("Invio in stampa…","info"); });
+  $("btnClear").addEventListener("click", ()=>{ if(send("clear")) fb("Canvas pulito.","info"); });
+  $("btnNew").addEventListener("click", ()=>{
+    if(confirm("Nuova sessione: azzera la firma e pulisce il quadro. Procedere?")){
+      if(send("new_session")) fb("Nuova sessione avviata.","info");
+    }
+  });
+
+  connect();
+</script>
+</body>
+</html>

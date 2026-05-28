@@ -9,3 +9,6 @@ output/*.jpg
 
 # macOS
 .DS_Store
+
+# Config locale preview/harness
+.claude/
