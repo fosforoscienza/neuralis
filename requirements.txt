@@ -1,0 +1,7 @@
+# Neuralis — dipendenze server Python (3.10+)
+# Mantenere leggero: nessun framework pesante.
+
+numpy>=2.0          # DSP (attenzione: np.trapz rimosso in 2.x -> np.trapezoid)
+scipy>=1.11         # filtri + PSD (Welch)
+websockets>=12.0    # server WebSocket (broadcast feature + comandi + relay immagine)
+brainflow>=5.10     # acquisizione Muse (import "lazy": non necessario in --simulate)

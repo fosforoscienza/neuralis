@@ -1,0 +1,11 @@
+# Ambiente Python
+.venv/
+__pycache__/
+*.pyc
+
+# Output quadri (PNG generati a runtime, non versionati)
+output/*.png
+output/*.jpg
+
+# macOS
+.DS_Store
