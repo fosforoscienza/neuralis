@@ -436,6 +436,11 @@ class Hub:
             if self.on_new_session:
                 self.on_new_session()
             await self._send_many(self._visual_clients(), json.dumps({"cmd": "new_session"}))
+        elif cmd == "anim_mode":
+            mode = msg.get("value", "flowfield")
+            print(f"[cmd] anim_mode -> {mode}")
+            await self._send_many(self._visual_clients(),
+                                  json.dumps({"cmd": "anim_mode", "value": mode}))
         elif cmd == "print":
             print("[cmd] print -> richiesta export hi-res al visual")
             vis = self._visual_clients()

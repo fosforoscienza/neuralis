@@ -28,6 +28,9 @@ let hasSignature = false, seed = null;
 // Parametri del campo di flusso, derivati dalla firma (unici per persona).
 let particles = [], fieldScale = 0.0012, turnsBase = 1.6, paletteOff = 0, NP = 1000;
 let zoff = 0;
+let powers = { delta: 0.1, theta: 0.2, alpha: 0.35, beta: 0.3, gamma: 0.05 };
+let animMode = 'flowfield';
+let kShapes = [];   // composizione Kandinsky (figure geometriche)
 
 // PRNG deterministico: stessa firma -> stesso campo di base, per persona.
 function mulberry32(a){
@@ -48,17 +51,32 @@ function applySignature(s){
   paletteOff = rng() * 44 - 22;          // sfumatura cromatica personale
   NP         = 900 + Math.floor(rng() * 600); // densita' di linee
   hasSignature = true;
-  initParticles();
+  initForMode();
 }
 
+function maxFlowType(){
+  const a = powers.alpha, b = powers.beta, t = powers.theta;
+  const r = Math.random() * (a + b + t + 0.001);
+  if(r < a) return 'alpha';
+  if(r < a + b) return 'beta';
+  return 'theta';
+}
 function newParticle(){
-  return { x: Math.random() * ART_W, y: Math.random() * ART_H,
-           life: 0, max: 0, hueJ: Math.random() * 2 - 1 };
+  const p = { x: Math.random() * ART_W, y: Math.random() * ART_H,
+              life: 0, max: 0, hueJ: Math.random() * 2 - 1 };
+  if(animMode === 'maxflow') p.type = maxFlowType();
+  return p;
 }
 function initParticles(){
   particles = [];
   for(let i = 0; i < NP; i++) particles.push(newParticle());
   clearArt();
+}
+
+// Inizializza la struttura adeguata al modo attivo.
+function initForMode(){
+  if(animMode === 'kandinsky') initKandinsky();
+  else initParticles();
 }
 
 // Colore di fondo dinamico: stessa famiglia cromatica delle linee (tonalita'
@@ -106,17 +124,19 @@ function draw(){
   const bg = bgColor();
   background(bg[0], bg[1], bg[2]);
   if(!hasSignature){ drawWaiting(); return; }
-  if(!frozen) step(artBuf, bg);
+  if(!frozen){
+    if(animMode === 'kandinsky') stepKandinsky(artBuf, bg);
+    else if(animMode === 'maxflow') stepMaxFlow(artBuf, bg);
+    else stepFlowField(artBuf, bg);
+  }
   // blit "contain": il frame 16:9 riempie la TV 16:9 (su monitor diversi, bordi).
   const s = Math.min(width / ART_W, height / ART_H);
   const w = ART_W * s, h = ART_H * s;
   image(artBuf, (width - w) / 2, (height - h) / 2, w, h);
 }
 
-// ---- passo generativo: campo di flusso che riempie tutto il rettangolo ------
-// activation -> LUNGHEZZA linee (calmo = distese/lunghe, attivo = serrate/corte)
-// warmth     -> COLORE (caldo ambra <-> freddo ciano)
-function step(g, bg){
+// ---- flow field: passo generativo base ----------------------------------------
+function stepFlowField(g, bg){
   // Persistenza: velo del colore di fondo (dinamico) invece di azzerare ->
   // l'opera si accumula e il fondo segue lentamente il mood.
   g.noStroke();
@@ -146,6 +166,212 @@ function step(g, bg){
     }
   }
   zoff += lerp(0.0008, 0.004, act);       // evoluzione lenta/rapida del campo
+}
+
+// ---- max flow: linee a lunghezza variabile per banda EEG -------------------
+// alpha (8-13 Hz) -> tratti lunghi e distesi   (tipo 'alpha')
+// beta  (13-30Hz) -> dash corti ed energetici  (tipo 'beta')
+// theta (4-8 Hz)  -> tratti medi ondulati      (tipo 'theta')
+// 3 famiglie cromatiche simultanee: base | base+150° | base-60°
+function stepMaxFlow(g, bg){
+  g.noStroke();
+  g.fill(bg[0], bg[1], bg[2], 4.0);
+  g.rect(0, 0, ART_W, ART_H);
+
+  const act = activation;
+  const baseHue = moodHue();
+  const turns = turnsBase * lerp(0.6, 3.8, act) + powers.theta * 2.5;
+
+  for(const p of particles){
+    if(!p.type) p.type = maxFlowType();
+    const ang = noise(p.x * fieldScale, p.y * fieldScale, zoff) * TWO_PI * turns;
+
+    let spd, lifeMax, sat, br, sw, coreA, glowA, hue;
+
+    switch(p.type){
+      case 'alpha':
+        spd     = lerp(1.2, 2.6, act);
+        lifeMax = lerp(200, 60, act);
+        sat = 88; br = 92; sw = 2.4; coreA = 48; glowA = 9;
+        hue = ((baseHue + paletteOff + p.hueJ * 22) % 360 + 360) % 360;
+        break;
+      case 'beta':
+        spd     = lerp(4.0, 7.0, act);
+        lifeMax = lerp(20, 8, act);
+        sat = 100; br = 100; sw = 1.2; coreA = 85; glowA = 14;
+        hue = ((baseHue + 150 + paletteOff + p.hueJ * 30) % 360 + 360) % 360;
+        break;
+      default: // theta
+        spd     = lerp(1.8, 3.6, act);
+        lifeMax = lerp(80, 25, act);
+        sat = 94; br = 96; sw = 1.7; coreA = 62; glowA = 11;
+        hue = ((baseHue - 60 + paletteOff + p.hueJ * 28) % 360 + 720) % 360;
+        break;
+    }
+
+    if(p.max === 0) p.max = lifeMax * (0.5 + Math.random());
+
+    const nx = p.x + Math.cos(ang) * spd;
+    const ny = p.y + Math.sin(ang) * spd;
+
+    g.strokeWeight(sw * 3.8); g.stroke(hue, sat - 14, br, glowA); g.line(p.x, p.y, nx, ny);
+    g.strokeWeight(sw);       g.stroke(hue, sat, br, coreA);       g.line(p.x, p.y, nx, ny);
+
+    p.x = nx; p.y = ny; p.life++;
+
+    if(p.life > p.max || p.x < 0 || p.x > ART_W || p.y < 0 || p.y > ART_H){
+      p.x = Math.random() * ART_W; p.y = Math.random() * ART_H;
+      p.life = 0; p.max = 0;
+      p.hueJ = Math.random() * 2 - 1;
+      p.type = maxFlowType();
+    }
+  }
+
+  zoff += lerp(0.001, 0.008, act);
+}
+
+// ---- kandinsky: quadro geometrico dinamico --------------------------------
+// Omaggio a "Composition VIII" (Bauhaus, 1923): cerchi, triangoli, linee,
+// archi e quadrati su fondo chiaro. Corrispondenza forma->colore di Kandinsky
+// (cerchio=blu, triangolo=giallo, quadrato=rosso); le BANDE EEG decidono QUALI
+// figure dominano, WARMTH gonfia le forme calde/fredde, ACTIVATION alza
+// saturazione/rotazione/densita'. Composizione seedata dalla firma (unica).
+const FAM = {
+  blue:    [[214,86,92],[224,80,88],[208,90,85]],
+  cyan:    [[190,85,92],[182,82,90]],
+  yellow:  [[52,92,100],[46,95,100],[40,96,98]],
+  red:     [[4,88,96],[2,92,92],[356,85,95]],
+  orange:  [[28,95,99],[34,96,98]],
+  green:   [[142,70,86],[160,66,82]],
+  violet:  [[278,68,90],[266,70,86]],
+  magenta: [[326,80,95],[338,78,94]],
+  black:   [[0,0,9]],
+};
+function pickFam(rng, arr){ return arr[Math.floor(rng() * arr.length)]; }
+
+// Tipo di figura pesato dalle bande correnti (istantanea alla creazione):
+// alpha->cerchi, beta->triangoli/linee, theta->archi, delta->quadrati, gamma->punti.
+function pickKType(rng){
+  const a = powers.alpha, b = powers.beta, t = powers.theta, d = powers.delta, g = powers.gamma;
+  const w = [
+    ["circle", 0.7  + a * 2.4],
+    ["tri",    0.4  + b * 2.0],
+    ["line",   0.35 + b * 1.5 + activation * 0.6],
+    ["arc",    0.3  + t * 2.2],
+    ["square", 0.45 + d * 1.8],
+    ["dot",    0.55 + g * 2.6],
+  ];
+  let tot = 0; for(const e of w) tot += e[1];
+  let r = rng() * tot;
+  for(const e of w){ if(r < e[1]) return e[0]; r -= e[1]; }
+  return "circle";
+}
+
+function makeKShape(rng, type){
+  const s = { type, x: rng() * ART_W, y: rng() * ART_H, rot: rng() * TWO_PI,
+              rotSpd: (rng() * 2 - 1) * 0.5, phase: rng() * TWO_PI,
+              drift: rng(), dphase: rng() * TWO_PI };
+  let pal;
+  if(type === "circle"){ pal = rng() < 0.8 ? FAM.blue : FAM.cyan; s.r = 38 + rng() * 190; s.rings = 1 + Math.floor(rng() * 4); }
+  else if(type === "tri"){ pal = FAM.yellow; s.r = 28 + rng() * 120; }
+  else if(type === "square"){ pal = rng() < 0.85 ? FAM.red : FAM.orange; s.r = 26 + rng() * 120; s.checker = rng() < 0.3; }
+  else if(type === "line"){ pal = rng() < 0.6 ? FAM.black : (rng() < 0.5 ? FAM.violet : FAM.blue);
+                            s.len = 130 + rng() * 430; s.thick = 4 + rng() * 12; s.node = rng() < 0.5;
+                            s.nodeCol = pickFam(rng, [].concat(FAM.red, FAM.yellow, FAM.blue)); }
+  else if(type === "arc"){ pal = [FAM.green, FAM.cyan, FAM.orange][Math.floor(rng() * 3)];
+                           s.r = 50 + rng() * 170; s.thick = 4 + rng() * 10; s.sweep = (0.6 + rng() * 1.6) * PI; }
+  else { pal = [FAM.magenta, FAM.orange, FAM.violet, FAM.yellow][Math.floor(rng() * 4)]; s.r = 5 + rng() * 22; }
+  s.col = pickFam(rng, pal);
+  s.neutral = s.col[1] <= 5;                                   // nero = accento neutro
+  s.warmFam = !s.neutral && (s.col[0] < 70 || s.col[0] > 300); // gialli/arancio/rossi/magenta
+  s.sortR = type === "line" ? s.len * 0.5 : (type === "dot" ? s.r * 0.4 : s.r);
+  return s;
+}
+
+function initKandinsky(){
+  const rng = mulberry32((seed >>> 0) || 1);                   // stessa firma -> stessa tela
+  const base = 240 + Math.floor(rng() * 120);                  // 240..360 figure
+  const count = Math.min(560, base + Math.floor(activation * 140)); // quantita' alta
+  kShapes = [];
+  for(let i = 0; i < count; i++) kShapes.push(makeKShape(rng, pickKType(rng)));
+  kShapes.sort((p, q) => q.sortR - p.sortR);                   // grandi dietro, accenti davanti
+  clearArt();
+}
+
+function drawKShape(g, s, tt, act){
+  // Le forme della temperatura dominante "respirano" col mood (warmth).
+  const emph = s.neutral ? 0.82 : (s.warmFam ? warmth : 1 - warmth);
+  const alpha = 66 + 30 * emph;
+  const h = s.col[0];
+  const sat = Math.min(100, s.col[1] * (0.82 + 0.25 * act));   // activation -> piu' vivido
+  const br = s.col[2];
+
+  if(s.type === "circle"){                                     // alpha -> respiro
+    const breath = 1 + 0.12 * Math.sin(tt * 1.2 + s.phase) * Math.min(1, powers.alpha * 3);
+    const R = s.r * breath;
+    for(let k = 0; k < s.rings; k++){
+      const rr = R * (1 - k / s.rings);
+      if(k % 2 === 0){ g.noStroke(); g.fill(h, sat, br, alpha * (0.55 + 0.45 * (1 - k / s.rings))); g.ellipse(0, 0, rr * 2, rr * 2); }
+      else { g.noFill(); g.stroke(0, 0, 12, 60); g.strokeWeight(2.2); g.ellipse(0, 0, rr * 2, rr * 2); }
+    }
+  } else if(s.type === "tri"){
+    const r = s.r;
+    g.noStroke(); g.fill(h, sat, br, alpha);
+    g.triangle(0, -r, r * 0.866, r * 0.5, -r * 0.866, r * 0.5);
+    g.noFill(); g.stroke(0, 0, 12, 45); g.strokeWeight(1.6);
+    g.triangle(0, -r, r * 0.866, r * 0.5, -r * 0.866, r * 0.5);
+  } else if(s.type === "square"){
+    g.rectMode(CENTER);
+    if(s.checker){                                             // scacchiera 2x2
+      const q = s.r / 2;
+      for(let ix = 0; ix < 2; ix++) for(let iy = 0; iy < 2; iy++){
+        const on = (ix + iy) % 2 === 0;
+        g.noStroke(); g.fill(h, sat, on ? br : br * 0.5, alpha);
+        g.rect(-q / 2 + ix * q, -q / 2 + iy * q, q, q);
+      }
+    } else {
+      g.noStroke(); g.fill(h, sat, br, alpha); g.rect(0, 0, s.r, s.r);
+      g.noFill(); g.stroke(0, 0, 12, 40); g.strokeWeight(1.6); g.rect(0, 0, s.r, s.r);
+    }
+  } else if(s.type === "line"){                                // movimento/tensione
+    g.rectMode(CENTER); g.noStroke(); g.fill(h, sat, br, Math.min(100, alpha + 8));
+    g.rect(0, 0, s.len, s.thick, s.thick * 0.5);
+    if(s.node){ g.fill(s.nodeCol[0], s.nodeCol[1], s.nodeCol[2], 95); g.ellipse(s.len / 2, 0, s.thick * 2.6, s.thick * 2.6); }
+  } else if(s.type === "arc"){                                 // theta -> oscilla
+    const sway = s.sweep * (0.85 + 0.15 * Math.sin(tt + s.phase) * (0.5 + Math.min(1, powers.theta * 3)));
+    g.noFill(); g.stroke(h, sat, br, alpha); g.strokeWeight(s.thick);
+    g.arc(0, 0, s.r * 2, s.r * 2, 0, sway);
+  } else {                                                     // dot: gamma -> scintilla
+    const tw = 1 + 0.5 * Math.sin(tt * 3 + s.phase) * Math.min(1, powers.gamma * 5);
+    g.noStroke(); g.fill(h, sat, br, alpha); g.ellipse(0, 0, s.r * 2 * tw, s.r * 2 * tw);
+  }
+}
+
+function stepKandinsky(g, bg){
+  if(!kShapes.length) initKandinsky();
+  // Fondo chiaro "da tela", lievemente tinto dal mood (caldo/freddo).
+  const lh = (moodHue() + 360) % 360;
+  g.push();
+  g.noStroke();
+  g.fill(lh, 6 + (1 - warmth) * 8, 90);
+  g.rect(0, 0, ART_W, ART_H);
+
+  const act = activation;
+  const tt = zoff;
+  for(const s of kShapes){
+    const dr = 14 * s.drift * (0.4 + act);                     // deriva lieve (activation)
+    const x = s.x + Math.sin(tt * 0.5 + s.dphase) * dr;
+    const y = s.y + Math.cos(tt * 0.43 + s.dphase * 1.3) * dr;
+    let rot = s.rot + tt * s.rotSpd * (0.12 + act * 0.7);
+    if(s.type === "tri") rot += Math.sin(tt * 7 + s.phase) * 0.05 * Math.min(1, powers.beta * 3); // beta -> vibra
+    g.push();
+    g.translate(x, y);
+    g.rotate(rot);
+    drawKShape(g, s, tt, act);
+    g.pop();
+  }
+  g.pop();
+  zoff += lerp(0.004, 0.018, act);
 }
 
 // ---- schermo di attesa (finche' non arriva la firma) ----------------------
@@ -182,6 +408,7 @@ function connectWS(){
     else if(m.cmd === "export") exportArtwork();
     else if(m.cmd === "freeze") frozen = !!m.value;
     else if(m.cmd === "clear") clearArt();
+    else if(m.cmd === "anim_mode"){ animMode = m.value || 'flowfield'; initForMode(); }
     else if(m.cmd === "new_session"){ hasSignature = false; seed = null; clearArt(); }
   };
   ws.onclose = () => setTimeout(connectWS, 1500);
@@ -189,6 +416,7 @@ function connectWS(){
 }
 
 function handleFeatures(m){
+  if(m.powers) powers = m.powers;
   if(m.warmth != null) warmth = m.warmth;
   if(m.activation != null) activation = m.activation;
   frozen = !!m.frozen;

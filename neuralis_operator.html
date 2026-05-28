@@ -73,6 +73,9 @@
   .feedback{margin-top:16px;min-height:24px;font-weight:600}
   .feedback.ok{color:var(--green)} .feedback.info{color:var(--accent)} .feedback.err{color:var(--red)}
   .hint{color:var(--muted);font-size:12px;font-weight:500}
+  .mode-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:12px}
+  .btn-mode{font-size:12px;padding:14px 10px;letter-spacing:1.5px}
+  .btn-mode.active{border-color:#6ea8ff;color:#6ea8ff;background:linear-gradient(180deg,#0e1830,#091020)}
 </style>
 </head>
 <body>
@@ -126,6 +129,11 @@
         <button id="btnNew" class="btn-sec">Nuova sessione</button>
         <button id="btnClear" class="btn-sec">Pulisci</button>
       </div>
+      <div class="mode-row">
+        <button id="btnFlowField" class="btn-mode active">Flow Field</button>
+        <button id="btnMaxFlow" class="btn-mode">Max Flow</button>
+        <button id="btnKandinsky" class="btn-mode">Kandinsky</button>
+      </div>
       <p class="hint" style="margin-top:12px">Flusso: <b>Congela</b> il quadro, mostralo e spiegalo, poi <b>Stampa</b>.</p>
       <div class="feedback" id="feedback"></div>
     </section>
@@ -137,7 +145,7 @@
   const BANDS = ["delta","theta","alpha","beta","gamma"];
   const WS_URL = new URLSearchParams(location.search).get("ws") || "ws://127.0.0.1:8765";
 
-  let ws = null, frozen = false;
+  let ws = null, frozen = false, animMode = 'flowfield';
 
   // ---- costruzione UI dinamica ----
   const chansEl = document.getElementById("chans");
@@ -245,6 +253,26 @@
     if(confirm("Nuova sessione: azzera la firma e pulisce il quadro. Procedere?")){
       if(send("new_session")) fb("Nuova sessione avviata.","info");
     }
+  });
+
+  function sendObj(obj){
+    if(ws && ws.readyState===WebSocket.OPEN){ ws.send(JSON.stringify(obj)); return true; }
+    fb("Comando non inviato: server offline.","err"); return false;
+  }
+  function setAnimMode(m){
+    animMode = m;
+    $("btnFlowField").classList.toggle("active", m === "flowfield");
+    $("btnMaxFlow").classList.toggle("active", m === "maxflow");
+    $("btnKandinsky").classList.toggle("active", m === "kandinsky");
+  }
+  $("btnFlowField").addEventListener("click", ()=>{
+    if(sendObj({cmd:"anim_mode",value:"flowfield"})){ setAnimMode("flowfield"); fb("Flow Field attivo.","info"); }
+  });
+  $("btnMaxFlow").addEventListener("click", ()=>{
+    if(sendObj({cmd:"anim_mode",value:"maxflow"})){ setAnimMode("maxflow"); fb("Max Flow attivo.","info"); }
+  });
+  $("btnKandinsky").addEventListener("click", ()=>{
+    if(sendObj({cmd:"anim_mode",value:"kandinsky"})){ setAnimMode("kandinsky"); fb("Kandinsky attivo.","info"); }
   });
 
   connect();
