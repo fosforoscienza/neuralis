@@ -18,7 +18,6 @@
 // Tutta l'opera vive in questo buffer e viene poi mostrata a pieno schermo sulla
 // TV; l'export di stampa e' lo stesso buffer (1920x1080 ~ 325 DPI su 15 cm).
 const ART_W = 1920, ART_H = 1080;
-const BG = [228, 45, 4];                 // fondo scuro (#05060a) in HSB
 
 let artBuf, ws;
 let warmth = 0.5, activation = 0.4, frozen = false;
@@ -60,10 +59,22 @@ function initParticles(){
   clearArt();
 }
 
+// Colore di fondo dinamico: stessa famiglia cromatica delle linee (tonalita'
+// dal mood = warmth), tono scuro che "respira" con l'evoluzione del campo
+// (zoff) e con l'attivazione -> quando le linee si muovono, anche lo sfondo
+// cambia un po'.
+function bgColor(){
+  const hue = (35 + (1 - warmth) * 175 + 6 * Math.sin(zoff * 0.7) + 360) % 360;
+  const sat = 45 + activation * 25;
+  const br  = 9 + 2.5 * Math.sin(zoff * 1.3) + activation * 3;
+  return [hue, sat, Math.max(4, br)];
+}
+
 function clearArt(){
+  const bg = bgColor();
   artBuf.push();
   artBuf.noStroke();
-  artBuf.fill(BG[0], BG[1], BG[2], 100);
+  artBuf.fill(bg[0], bg[1], bg[2], 100);
   artBuf.rect(0, 0, ART_W, ART_H);
   artBuf.pop();
 }
@@ -82,9 +93,10 @@ function setup(){
 function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
 
 function draw(){
-  background(BG[0], BG[1], BG[2]);
+  const bg = bgColor();
+  background(bg[0], bg[1], bg[2]);
   if(!hasSignature){ drawWaiting(); return; }
-  if(!frozen) step(artBuf);
+  if(!frozen) step(artBuf, bg);
   // blit "contain": il frame 16:9 riempie la TV 16:9 (su monitor diversi, bordi).
   const s = Math.min(width / ART_W, height / ART_H);
   const w = ART_W * s, h = ART_H * s;
@@ -94,10 +106,11 @@ function draw(){
 // ---- passo generativo: campo di flusso che riempie tutto il rettangolo ------
 // activation -> LUNGHEZZA linee (calmo = distese/lunghe, attivo = serrate/corte)
 // warmth     -> COLORE (caldo ambra <-> freddo ciano)
-function step(g){
-  // Persistenza: velo scuro leggero invece di azzerare -> l'opera si accumula.
+function step(g, bg){
+  // Persistenza: velo del colore di fondo (dinamico) invece di azzerare ->
+  // l'opera si accumula e il fondo segue lentamente il mood.
   g.noStroke();
-  g.fill(BG[0], BG[1], BG[2], 3.0);
+  g.fill(bg[0], bg[1], bg[2], 3.0);
   g.rect(0, 0, ART_W, ART_H);
 
   const act = activation;
