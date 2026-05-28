@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import base64
 import json
+import logging
 import os
 import re
 import sys
@@ -547,6 +548,10 @@ async def main():
                     help='opzioni extra per lp, es. "-o media=Postcard -o fit-to-page"')
     ap.add_argument("--output-dir", default="output")
     args = ap.parse_args()
+
+    # Silenzia i traceback innocui di handshake (es. una sonda TCP che apre la
+    # porta senza completare l'handshake WebSocket): non sono errori del server.
+    logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
 
     if args.simulate:
         acq = SimulatedAcquirer(mains=args.mains)

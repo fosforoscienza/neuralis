@@ -50,19 +50,46 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Avvio (modalità demo, senza hardware)
+## Avvio one-click
+
+```bash
+./start.sh                 # demo simulata (server + visual in kiosk + dashboard)
+```
+
+Per l'evento reale (Muse + stampante):
+
+```bash
+NEURALIS_SIMULATE=0 NEURALIS_PRINTER="Canon_SELPHY" ./start.sh
+```
+
+`start.sh` avvia il server, apre il **visual in Chrome kiosk** sulla TV e la
+**dashboard** sul Mac, e ferma tutto in modo pulito con Ctrl+C. Variabili utili:
+
+| Variabile | Default | Significato |
+|---|---|---|
+| `NEURALIS_SIMULATE` | `1` | `0` = Muse reale |
+| `NEURALIS_PRINTER` | _(vuota)_ | nome stampante CUPS; vuota = salva solo PNG |
+| `NEURALIS_MAINS` | `50` | frequenza di rete (50 IT / 60 US) |
+| `NEURALIS_TV_POS` | `1728,0` | origine della finestra kiosk = posizione della TV |
+| `NEURALIS_OPEN_BROWSERS` | `1` | `0` = avvia solo il server |
+| `NEURALIS_EXTRA` | _(vuota)_ | argomenti extra al server (es. `--serial-port /dev/cu.usbmodemXXX`) |
+
+## Avvio manuale
 
 ```bash
 source .venv/bin/activate
-python neuralis_server.py --simulate
+python neuralis_server.py --simulate            # oppure: --printer "<Nome>" per stampare
 ```
 
-Poi aprire `neuralis_operator.html` sul Mac e `neuralis_visual.html` sulla TV.
+Poi aprire `neuralis_operator.html` sul Mac e `neuralis_visual.html` sulla TV
+(in Chrome kiosk). Le pagine accettano `?ws=ws://host:porta` per puntare a un
+server diverso da `ws://127.0.0.1:8765`.
 
 ## Stato del progetto
 
-Sviluppo per fasi (vedi brief): 0 setup · 1 protocollo+server · 2 dashboard ·
-3 visual+export hi-res · 4 stampa · 5 hardware Muse · 6 rifiniture evento.
+Completo e funzionante in `--simulate`: server, dashboard, visual e
+stampa/salvataggio del quadro. Resta da validare l'**hardware Muse reale**
+(ordine canali EEG e soglie di qualità) con device + dongle BLED112 collegati.
 
 Decisioni: stampa a due pulsanti (CONGELA → STAMPA), anteprima solo su TV,
 stampa 10×15 cm orizzontale @300 DPI, notch 50 Hz (rete IT).
