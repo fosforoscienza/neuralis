@@ -214,9 +214,10 @@
   }
 
   function showPrintResult(m){
-    if(m.ok && m.printed) fb("Stampato su "+(m.printer||"stampante")+".","ok");
-    else if(m.ok && !m.printed) fb("Quadro salvato: "+(m.saved||"file")+" — stampa non ancora attiva.","info");
-    else fb("Errore stampa: "+(m.error||"sconosciuto"),"err");
+    if(!m.ok){ fb("Errore: "+(m.error||"sconosciuto"),"err"); return; }
+    if(m.printed) fb("Stampato su "+(m.printer||"stampante")+(m.job?" — job "+m.job:""),"ok");
+    else if(m.printer) fb("Stampa fallita ("+(m.error||"errore")+"). Quadro salvato: "+(m.saved||"file"),"err");
+    else fb("Quadro salvato: "+(m.saved||"file"),"info");
   }
 
   // ---- WebSocket con riconnessione ----

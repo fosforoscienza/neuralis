@@ -20,6 +20,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -355,10 +356,11 @@ class MuseAcquirer(Acquirer):
 # Hub WebSocket (client, broadcast, comandi, relay immagine)
 # --------------------------------------------------------------------------- #
 class Hub:
-    def __init__(self, printer: str | None, output_dir: str):
+    def __init__(self, printer: str | None, output_dir: str, print_options=None):
         self.clients = {}            # websocket -> role ("visual"|"operator"|"?")
         self.frozen = False
         self.printer = printer
+        self.print_options = print_options or []
         self.output_dir = output_dir
         self.engine_snapshot = {}
         self.muse_state = "disconnected"
@@ -466,9 +468,49 @@ class Hub:
             f.write(png)
         size_kb = len(png) // 1024
         print(f"[artwork] PNG salvato: {fname} ({size_kb} KB)")
-        # Fase 4 collegera' qui la stampa via lp; per ora solo salvataggio.
+        printed, job, perr = await self._print_file(fname)
+        if printed:
+            print(f"[stampa] inviato a '{self.printer}' (job {job})")
+        elif self.printer:
+            print(f"[stampa] FALLITA su '{self.printer}': {perr} -> fallback su file",
+                  file=sys.stderr)
+        else:
+            print("[stampa] nessuna stampante configurata: salvato solo su file")
         await self._notify_operators({"type": "print_result", "ok": True,
-                                      "saved": fname, "printed": False})
+                                      "saved": fname, "printer": self.printer,
+                                      "printed": printed, "job": job, "error": perr})
+
+    async def _print_file(self, path: str):
+        """Stampa via CUPS `lp`. Ritorna (printed, job_id, error).
+
+        Il PNG e' gia' stato salvato: se la stampa fallisce il file resta come
+        fallback non bloccante (l'evento non si interrompe).
+        """
+        if not self.printer:
+            return (False, None, None)
+        args = ["lp", "-d", self.printer, *self.print_options, os.path.abspath(path)]
+        # LC_ALL=C per output prevedibile; il job id si estrae comunque via regex
+        # (CUPS localizza il messaggio, es. in italiano "L'id richiesto e' ...").
+        env = dict(os.environ, LC_ALL="C", LANG="C")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args, env=env,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            out, err = await proc.communicate()
+            if proc.returncode == 0:
+                txt = out.decode(errors="replace").strip()
+                m = re.search(r"(\S+-\d+)", txt)     # es. "Pantum_...-27"
+                return (True, m.group(1) if m else None, None)
+            msg = err.decode(errors="replace").strip()
+            # CUPS riporta un criptico "No such file or directory" quando la
+            # destinazione non esiste: rendiamolo comprensibile all'operatore.
+            if "No such file or directory" in msg:
+                msg = f"stampante '{self.printer}' non trovata o non disponibile"
+            return (False, None, msg or f"lp uscita {proc.returncode}")
+        except FileNotFoundError:
+            return (False, None, "comando lp non trovato (CUPS)")
+        except Exception as e:
+            return (False, None, str(e))
 
 
 # --------------------------------------------------------------------------- #
@@ -500,7 +542,9 @@ async def main():
     ap.add_argument("--mains", type=int, default=50, choices=[50, 60], help="frequenza di rete")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--printer", default=None, help="nome stampante CUPS (Fase 4)")
+    ap.add_argument("--printer", default=None, help="nome stampante CUPS")
+    ap.add_argument("--print-options", default="",
+                    help='opzioni extra per lp, es. "-o media=Postcard -o fit-to-page"')
     ap.add_argument("--output-dir", default="output")
     args = ap.parse_args()
 
@@ -513,8 +557,20 @@ async def main():
 
     await acq.start()
     engine = FeatureEngine(fs=acq.fs, mains=args.mains)
-    hub = Hub(printer=args.printer, output_dir=args.output_dir)
+    hub = Hub(printer=args.printer, output_dir=args.output_dir,
+              print_options=args.print_options.split())
     hub.on_new_session = engine.reset_session
+
+    if args.printer:
+        chk = await asyncio.create_subprocess_exec(
+            "lpstat", "-p", args.printer,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await chk.wait()
+        if chk.returncode == 0:
+            print(f"[stampa] stampante '{args.printer}' trovata.")
+        else:
+            print(f"[stampa] ATTENZIONE: stampante '{args.printer}' non trovata; "
+                  f"i quadri saranno salvati in '{args.output_dir}/' come fallback.")
 
     async with websockets.serve(
         lambda ws: ws_handler(hub, ws), args.host, args.port, max_size=MAX_WS_BYTES
