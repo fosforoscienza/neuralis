@@ -419,8 +419,8 @@ function stepKandinsky(g, bg){
 // (formula di Chladni); ampiezza = potenza della banda LIVE, numeri d'onda e
 // fasi dalla firma. |S|~0 = linea nodale ("sabbia"); antinodi = colore (segno
 // di S -> tinta calda/fredda). Calcolato su griglia ridotta e upscalato.
-const CYM_W = 320, CYM_H = 180;
-let cymBuf = null, cymModes = [];
+const CYM_W = 960, CYM_H = 540;
+let cymBuf = null, cymModes = [], cymLUT = null;
 
 // HSB(0-360,0-100,0-100) -> RGB(0-255) per scrittura diretta nei pixel.
 function hsb2rgb(h, s, b){
@@ -448,6 +448,28 @@ function initCymatics(){
   }
 }
 
+// Colormap divergente (512 voci): freddo (S<0) -> "sabbia" pallida (S~0) -> caldo
+// (S>0), con transizione MORBIDA al centro -> linee nodali sfumate, mai a gradini.
+function buildCymLUT(){
+  if(!cymLUT) cymLUT = new Uint8ClampedArray(512 * 3);
+  const warmHue = lerp(40, 6, warmth), coolHue = lerp(196, 232, warmth);
+  const sR = 236, sG = 228, sB = 205;                 // sabbia
+  for(let k = 0; k < 512; k++){
+    const v = (k / 511) * 2 - 1, tt = Math.abs(v), warm = v >= 0;
+    const hue = warm ? warmHue : coolHue;
+    let r, g, b;
+    if(tt < 0.12){                                     // miscela morbida verso la sabbia
+      const c = hsb2rgb(hue, 58, 82), f = tt / 0.12;
+      r = sR + (c[0] - sR) * f; g = sG + (c[1] - sG) * f; b = sB + (c[2] - sB) * f;
+    } else {
+      const emph = warm ? (0.82 + 0.3 * warmth) : (0.82 + 0.3 * (1 - warmth));
+      const c = hsb2rgb(hue, 60 + 38 * tt, Math.min(100, (30 + 70 * Math.pow(tt, 0.85)) * emph));
+      r = c[0]; g = c[1]; b = c[2];
+    }
+    cymLUT[k * 3] = r; cymLUT[k * 3 + 1] = g; cymLUT[k * 3 + 2] = b;
+  }
+}
+
 function stepCymatics(g, bg){
   if(!cymBuf || !cymModes.length) initCymatics();
   const t = zoff, act = activation;
@@ -463,31 +485,30 @@ function stepCymatics(g, bg){
     for(let j = 0; j < CYM_H; j++){ const v = j / (CYM_H - 1); bn[j] = Math.cos(n * Math.PI * v); bm[j] = Math.cos(m * Math.PI * v); }
     cuN.push(an); cuM.push(am); rvN.push(bn); rvM.push(bm);
   }
-  const warmHue = lerp(44, 8, warmth);                // ambra -> rosso col calore
-  const coolHue = lerp(192, 224, warmth);             // ciano -> indaco col freddo
-  const gain = 1.4 + act * 0.9;
+  buildCymLUT();
+  const L = cymLUT, gain = 1.5 + act * 1.0;
+  const a0 = cuN[0], a1 = cuN[1], a2 = cuN[2], a3 = cuN[3], a4 = cuN[4];
+  const m0 = cuM[0], m1 = cuM[1], m2 = cuM[2], m3 = cuM[3], m4 = cuM[4];
+  const A0 = A[0] * tph[0], A1 = A[1] * tph[1], A2 = A[2] * tph[2], A3 = A[3] * tph[3], A4 = A[4] * tph[4];
   cymBuf.loadPixels();
   const px = cymBuf.pixels;
   for(let j = 0; j < CYM_H; j++){
+    const b0 = rvM[0][j], b1 = rvM[1][j], b2 = rvM[2][j], b3 = rvM[3][j], b4 = rvM[4][j];
+    const c0 = rvN[0][j], c1 = rvN[1][j], c2 = rvN[2][j], c3 = rvN[3][j], c4 = rvN[4][j];
+    let row = j * CYM_W * 4;
     for(let i = 0; i < CYM_W; i++){
-      let S = 0;
-      for(let b = 0; b < 5; b++) S += A[b] * (cuN[b][i] * rvM[b][j] - cuM[b][i] * rvN[b][j]) * tph[b];
-      const a = Math.min(1, Math.abs(S * 0.5) * gain);
-      let r, gr, bl;
-      if(a < 0.032){ r = 234; gr = 226; bl = 200; }   // linea nodale = "sabbia" pallida (più sottile)
-      else {
-        const warm = S >= 0;
-        const hue = warm ? warmHue : coolHue;          // mappa divergente caldo/freddo
-        const emph = warm ? (0.8 + 0.32 * warmth) : (0.8 + 0.32 * (1 - warmth));
-        const bri = Math.min(100, (16 + 80 * Math.pow(a, 0.8)) * emph);
-        [r, gr, bl] = hsb2rgb(hue, 72 + 26 * a, bri);
-      }
-      const idx = (j * CYM_W + i) * 4;
-      px[idx] = r; px[idx + 1] = gr; px[idx + 2] = bl; px[idx + 3] = 255;
+      const S = A0 * (a0[i] * b0 - m0[i] * c0) + A1 * (a1[i] * b1 - m1[i] * c1)
+              + A2 * (a2[i] * b2 - m2[i] * c2) + A3 * (a3[i] * b3 - m3[i] * c3)
+              + A4 * (a4[i] * b4 - m4[i] * c4);
+      let v = S * 0.5 * gain;
+      if(v > 1) v = 1; else if(v < -1) v = -1;
+      const li = (((v + 1) * 0.5 * 511) | 0) * 3;
+      px[row] = L[li]; px[row + 1] = L[li + 1]; px[row + 2] = L[li + 2]; px[row + 3] = 255;
+      row += 4;
     }
   }
   cymBuf.updatePixels();
-  g.image(cymBuf, 0, 0, ART_W, ART_H);                // upscale 8x sul buffer di stampa
+  g.image(cymBuf, 0, 0, ART_W, ART_H);                // upscale 2x liscio sul buffer di stampa
   zoff += lerp(0.01, 0.05, act);
 }
 
@@ -591,62 +612,79 @@ function stepNeural(g, bg){
 // lentamente. Ogni tessera rappresenta una banda EEG: tinta dalla banda,
 // luminosità dalla sua potenza LIVE (banda dominante -> tessere accese). I
 // bordi (cambio di proprietario) sono scuri = piombatura da vetrata.
-const VOR_W = 192, VOR_H = 108;
-const VOR_BANDHUE = [222, 168, 40, 6, 300];           // delta,theta,alpha,beta,gamma
-const VOR_WARMBAND = [false, false, true, true, true];
-let vorBuf = null, vorSites = [], vorOwner = null;
+const VOR_W = 480, VOR_H = 270;                       // griglia alta -> bordi lisci (upscale 4x)
+let vorBuf = null, vorSites = [], vorOwner = null, vorSX = null, vorSY = null, vorTick = 0;
 
 function initVoronoi(){
   if(!vorBuf){ vorBuf = createGraphics(VOR_W, VOR_H); vorBuf.pixelDensity(1); }
   if(!vorOwner) vorOwner = new Int16Array(VOR_W * VOR_H);
   const rng = mulberry32((seed >>> 0) || 1);
-  const M = 38 + Math.floor(rng() * 28);              // 38..66 tessere
+  const M = 60;                                        // 60 tessere
   vorSites = [];
   for(let i = 0; i < M; i++){
-    const ang = rng() * TWO_PI, sp = 0.15 + rng() * 0.5;
+    const ang = rng() * TWO_PI, sp = 0.12 + rng() * 0.38;
+    const accent = rng() < 0.22;                       // minoranza complementare -> palette elegante
     vorSites.push({ x: rng() * VOR_W, y: rng() * VOR_H,
       vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
-      band: Math.floor(rng() * 5), hueJ: rng() * 16 - 8, phase: rng() * TWO_PI });
+      hueOff: accent ? (180 + rng() * 44 - 22) : (rng() * 72 - 36),  // analogo +/-36 o complementare
+      tone: rng(), satBase: 42 + rng() * 32, band: Math.floor(rng() * 5), phase: rng() * TWO_PI });
   }
+  vorSX = new Float32Array(M); vorSY = new Float32Array(M);
   clearArt();
 }
 
 function stepVoronoi(g, bg){
   if(!vorBuf || !vorSites.length) initVoronoi();
-  const act = activation, t = zoff, M = vorSites.length, drift = 0.2 + act * 1.1;
-  for(const s of vorSites){                            // deriva lenta + rimbalzo ai bordi
-    s.x += s.vx * drift; s.y += s.vy * drift;
-    if(s.x < 0){ s.x = 0; s.vx *= -1; } else if(s.x > VOR_W){ s.x = VOR_W; s.vx *= -1; }
-    if(s.y < 0){ s.y = 0; s.vy *= -1; } else if(s.y > VOR_H){ s.y = VOR_H; s.vy *= -1; }
+  const act = activation, t = zoff, M = vorSites.length;
+  const owner = vorOwner, SX = vorSX, SY = vorSY;
+  // Geometria (deriva siti + nearest-site) ricalcolata a frame alterni: i siti
+  // sono lenti, l'occhio non distingue, e si dimezza il costo dominante.
+  if((vorTick++ & 1) === 0){
+    const drift = (0.18 + act * 1.0) * 2;              // *2: aggiornata ogni 2 frame
+    for(let m = 0; m < M; m++){
+      const s = vorSites[m];
+      s.x += s.vx * drift; s.y += s.vy * drift;
+      if(s.x < 0){ s.x = 0; s.vx *= -1; } else if(s.x > VOR_W){ s.x = VOR_W; s.vx *= -1; }
+      if(s.y < 0){ s.y = 0; s.vy *= -1; } else if(s.y > VOR_H){ s.y = VOR_H; s.vy *= -1; }
+      SX[m] = s.x; SY[m] = s.y;
+    }
+    for(let j = 0; j < VOR_H; j++){
+      const rowo = j * VOR_W;
+      for(let i = 0; i < VOR_W; i++){
+        let best = 0, bd = 1e9;
+        for(let m = 0; m < M; m++){ const dx = i - SX[m], dy = j - SY[m]; const d = dx * dx + dy * dy; if(d < bd){ bd = d; best = m; } }
+        owner[rowo + i] = best;
+      }
+    }
   }
   const A = [powers.delta, powers.theta, powers.alpha, powers.beta, powers.gamma];
-  const cols = vorSites.map(s => {                     // colore tessera: banda + potenza live
-    const breathe = 0.85 + 0.15 * Math.sin(t * 1.3 + s.phase) * Math.min(1, powers.alpha * 3);
-    const pw = A[s.band];
-    const emph = VOR_WARMBAND[s.band] ? (0.72 + 0.5 * warmth) : (0.72 + 0.5 * (1 - warmth));
-    const sat = 55 + 40 * Math.min(1, pw * 3);
-    const bri = Math.min(100, (30 + 62 * Math.min(1, pw * 3.2)) * breathe * emph);
-    return hsb2rgb((VOR_BANDHUE[s.band] + s.hueJ + 360) % 360, sat, bri);
-  });
-  const owner = vorOwner;                              // nearest-site su griglia ridotta
-  for(let j = 0; j < VOR_H; j++) for(let i = 0; i < VOR_W; i++){
-    let best = 0, bd = 1e9;
-    for(let m = 0; m < M; m++){ const dx = i - vorSites[m].x, dy = j - vorSites[m].y; const d = dx*dx + dy*dy; if(d < bd){ bd = d; best = m; } }
-    owner[j * VOR_W + i] = best;
+  const base = moodHue();                              // palette analoga attorno al mood
+  const cols = new Array(M);
+  for(let m = 0; m < M; m++){
+    const s = vorSites[m];
+    const breathe = 0.9 + 0.1 * Math.sin(t * 1.2 + s.phase) * Math.min(1, powers.alpha * 3);
+    const emph = 0.78 + 0.5 * Math.min(1, A[s.band] * 3);   // banda dominante -> tessere più accese
+    const hue = (base + s.hueOff + 360) % 360;
+    const sat = Math.min(95, s.satBase * (0.85 + 0.2 * act));
+    const bri = Math.min(92, lerp(34, 90, s.tone) * emph * breathe);
+    cols[m] = hsb2rgb(hue, sat, bri);
   }
   vorBuf.loadPixels();
   const px = vorBuf.pixels;
-  for(let j = 0; j < VOR_H; j++) for(let i = 0; i < VOR_W; i++){
-    const o = owner[j * VOR_W + i];
-    const border = (i + 1 < VOR_W && owner[j * VOR_W + i + 1] !== o) || (j + 1 < VOR_H && owner[(j + 1) * VOR_W + i] !== o);
-    const idx = (j * VOR_W + i) * 4;
-    if(border){ px[idx] = 14; px[idx + 1] = 12; px[idx + 2] = 20; }   // piombatura scura
-    else { const c = cols[o]; px[idx] = c[0]; px[idx + 1] = c[1]; px[idx + 2] = c[2]; }
-    px[idx + 3] = 255;
+  for(let j = 0; j < VOR_H; j++){
+    const rowo = j * VOR_W;
+    for(let i = 0; i < VOR_W; i++){
+      const o = owner[rowo + i];
+      const border = (i + 1 < VOR_W && owner[rowo + i + 1] !== o) || (j + 1 < VOR_H && owner[rowo + VOR_W + i] !== o);
+      const idx = (rowo + i) * 4;
+      if(border){ px[idx] = 20; px[idx + 1] = 18; px[idx + 2] = 28; }   // piombatura scura
+      else { const c = cols[o]; px[idx] = c[0]; px[idx + 1] = c[1]; px[idx + 2] = c[2]; }
+      px[idx + 3] = 255;
+    }
   }
   vorBuf.updatePixels();
-  g.image(vorBuf, 0, 0, ART_W, ART_H);                 // upscale 10x sul buffer di stampa
-  zoff += lerp(0.004, 0.02, act);
+  g.image(vorBuf, 0, 0, ART_W, ART_H);                 // upscale 4x liscio sul buffer di stampa
+  zoff += lerp(0.004, 0.018, act);
 }
 
 // ---- mandala / caleidoscopio: simmetria radiale dalla firma ---------------
@@ -654,80 +692,72 @@ function stepVoronoi(g, bg){
 // replicato per rotazione + riflessione (diedrale). Elementi colorati per
 // banda: la potenza LIVE ne regola visibilità/dimensione. alpha->respiro,
 // beta->rotazione e raggi, theta->archi, activation->velocità.
-const MAND_HUE = [222, 168, 40, 6, 300];              // delta,theta,alpha,beta,gamma
-let mandala = { K: 8, els: [] };
+// Struttura (K, anelli) seedata dalla firma; forma e colore generati ogni frame
+// dai parametri LIVE -> il mandala MORFIZZA, non fa solo zoom.
+let mandala = { K: 8, rings: [], center: null };
 
 function initMandala(){
   const rng = mulberry32((seed >>> 0) || 1);
-  const K = 6 + Math.floor(rng() * 11);               // ordine simmetria 6..16
-  const wedge = TWO_PI / K;
-  const nrings = 6 + Math.floor(rng() * 5);           // 6..10 anelli di motivi
-  const types = ['circle', 'petal', 'arc', 'ray', 'dot'];
-  const els = [];
-  // motivo centrale (disco + corona di petali) per ancorare il centro
-  els.push({ rad: 0.0, ang: 0, type: 'circle', size: 0.06, band: Math.floor(rng() * 5), mir: false });
-  els.push({ rad: 0.07, ang: rng() * wedge * 0.5, type: 'petal', size: 0.045, band: Math.floor(rng() * 5), mir: true });
-  for(let ring = 0; ring < nrings; ring++){
-    const rad = 0.1 + ring * (0.86 / nrings) + rng() * 0.03;
-    const count = 2 + Math.floor(rng() * 3);          // 2..4 elementi per anello
-    for(let c = 0; c < count; c++){
-      els.push({
-        rad, ang: rng() * wedge * 0.5,
-        type: types[Math.floor(rng() * types.length)],
-        size: 0.025 + rng() * 0.06, band: Math.floor(rng() * 5), mir: rng() < 0.75
-      });
-    }
+  const K = 6 + Math.floor(rng() * 11);               // ordine simmetria (firma)
+  const nrings = 6 + Math.floor(rng() * 4);           // 6..9 anelli
+  const rings = [];
+  for(let i = 0; i < nrings; i++){
+    rings.push({
+      rad: 0.1 + i * (0.88 / nrings) + rng() * 0.02,
+      band: Math.floor(rng() * 5),                     // banda che "abita" l'anello
+      mult: 1 + Math.floor(rng() * 2),                 // K o 2K elementi
+      hueOff: rng() * 50 - 25, phase: rng() * TWO_PI,
+      arc: rng() < 0.33                                // ~1/3 anelli sono fasce ad arco
+    });
   }
-  mandala = { K, els };
+  mandala = { K, rings, center: { band: Math.floor(rng() * 5), hueOff: rng() * 40 - 20, rings: 2 + Math.floor(rng() * 3) } };
   clearArt();
 }
 
-function drawMandalaEl(g, el, maxR, breath, t, A, sign){
-  const ang = el.ang * sign;
-  const r = el.rad * maxR * breath;
-  const x = r * Math.cos(ang), y = r * Math.sin(ang);
-  const pw = A[el.band];
-  const vis = 0.3 + 0.7 * Math.min(1, pw * 3.2);       // banda dominante -> più visibile
-  const hue = MAND_HUE[el.band];
-  const sat = 70 + 26 * Math.min(1, pw * 3);
-  const bri = 60 + 40 * vis, aA = 35 + 60 * vis;
-  const sz = el.size * maxR * (0.6 + 0.8 * vis) * breath;
-  g.push();
-  g.translate(x, y);
-  g.rotate(ang + Math.PI / 2);                          // orienta radialmente
-  if(el.type === 'circle'){ g.noStroke(); g.fill(hue, sat, bri, aA); g.circle(0, 0, sz * 2); }
-  else if(el.type === 'dot'){ g.noStroke(); g.fill(hue, sat, 100, aA); g.circle(0, 0, sz); }
-  else if(el.type === 'petal'){ g.noStroke(); g.fill(hue, sat, bri, aA); g.ellipse(0, 0, sz * 0.8, sz * 2.2); }
-  else if(el.type === 'ray'){                           // beta -> raggi lunghi
-    const len = sz * (1.5 + powers.beta * 4);
-    g.noStroke(); g.rectMode(CENTER); g.fill(hue, sat, bri, aA);
-    g.rect(0, 0, Math.max(2, sz * 0.25), len, sz * 0.1);
-  } else {                                              // arc
-    g.noFill(); g.stroke(hue, sat, bri, aA); g.strokeWeight(Math.max(2, sz * 0.3));
-    g.arc(0, 0, sz * 2, sz * 2, 0, Math.PI * (0.6 + 0.4 * Math.sin(t + el.rad * 10)));
-  }
-  g.pop();
-}
-
 function stepMandala(g, bg){
-  if(!mandala.els.length) initMandala();
+  if(!mandala.rings.length) initMandala();
   const act = activation, t = zoff, K = mandala.K;
   const A = [powers.delta, powers.theta, powers.alpha, powers.beta, powers.gamma];
   const maxR = Math.min(ART_W, ART_H) * 0.48;
+  // FORMA: tondo(alpha) <-> appuntito(beta). COLORE: warmth + lenta deriva temporale.
+  const morph = Math.min(1, powers.beta / (powers.alpha + powers.beta + 0.001));
+  const baseHue = 200 + warmth * 150 + t * 5;
+  const sat = 58 + act * 36;
   g.push();
   g.noStroke(); g.fill(bg[0], bg[1], Math.max(4, bg[2]), 100); g.rect(0, 0, ART_W, ART_H); // fondo pulito
   g.translate(ART_W / 2, ART_H / 2);
-  g.rotate(t * (0.04 + powers.beta * 0.5 + act * 0.1));  // rotazione (beta/activation)
-  const breath = 1 + (0.05 + 0.08 * Math.min(1, powers.alpha * 3)) * Math.sin(t * 1.1); // respiro (alpha)
-  const wedge = TWO_PI / K;
-  for(let k = 0; k < K; k++){
-    g.push();
-    g.rotate(k * wedge);
-    for(const el of mandala.els){
-      drawMandalaEl(g, el, maxR, breath, t, A, 1);
-      if(el.mir) drawMandalaEl(g, el, maxR, breath, t, A, -1);  // riflessione -> diedrale
+  g.rotate(t * (0.05 + powers.beta * 0.6 + act * 0.12));            // rotazione (beta/activation)
+  const breath = 1 + (0.04 + 0.11 * Math.min(1, powers.alpha * 3)) * Math.sin(t * 1.1); // respiro (alpha)
+
+  // centro: cerchi concentrici, numero/raggio dai parametri
+  const cen = mandala.center, cHue = (baseHue + cen.hueOff + 360) % 360;
+  const cR = (0.04 + 0.05 * Math.min(1, A[cen.band] * 3)) * maxR * breath;
+  for(let i = cen.rings; i >= 1; i--){ g.fill((cHue + i * 12) % 360, sat, Math.min(100, 52 + 12 * i), Math.min(100, 55 + 12 * i)); g.circle(0, 0, cR * i * 0.95); }
+
+  for(const ring of mandala.rings){
+    const pw = A[ring.band], vis = 0.25 + 0.75 * Math.min(1, pw * 3.2);
+    const r = ring.rad * maxR * breath;
+    const hue = (baseHue + ring.hueOff + ring.band * 6 + 360) % 360;
+    const aA = 38 + 55 * vis, bri = 58 + 40 * vis;
+    if(ring.arc){                                                  // fascia ad arco: theta -> spessore/sweep
+      const sw = (0.4 + powers.theta * 3) * 0.04 * maxR + 3;
+      g.noFill(); g.stroke(hue, sat, bri, aA); g.strokeWeight(sw);
+      const span = (TWO_PI / K) * (0.5 + 0.4 * Math.sin(t + ring.phase));
+      for(let k = 0; k < K; k++){ const a0 = ring.phase + k * (TWO_PI / K); g.arc(0, 0, r * 2, r * 2, a0 - span, a0 + span); }
+      continue;
     }
-    g.pop();
+    const count = K * ring.mult, sz = (0.03 + 0.05 * vis) * maxR * breath;
+    g.noStroke();
+    for(let k = 0; k < count; k++){
+      const ang = ring.phase + k * (TWO_PI / count);
+      g.push(); g.translate(r * Math.cos(ang), r * Math.sin(ang)); g.rotate(ang + Math.PI / 2);
+      const ra = aA * (1 - morph);                                 // petalo tondo (alpha), allungato da theta
+      if(ra > 3){ g.fill(hue, sat, bri, ra); g.ellipse(0, 0, sz * 0.95, sz * (1.4 + powers.theta * 3)); }
+      const sa = aA * morph;                                       // raggio appuntito (beta), lungo con beta
+      if(sa > 3){ const len = sz * (2 + powers.beta * 5); g.fill((hue + 16) % 360, Math.min(100, sat + 12), Math.min(100, bri + 8), sa); g.triangle(-sz * 0.2, 0, sz * 0.2, 0, 0, -len); }
+      g.fill(hue, sat * 0.55, 100, aA * 0.5); g.circle(0, 0, sz * 0.5); // nucleo luminoso
+      g.pop();
+    }
   }
   g.pop();
   zoff += lerp(0.006, 0.03, act);
