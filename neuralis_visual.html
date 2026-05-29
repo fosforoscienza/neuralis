@@ -474,7 +474,7 @@ function stepCymatics(g, bg){
       for(let b = 0; b < 5; b++) S += A[b] * (cuN[b][i] * rvM[b][j] - cuM[b][i] * rvN[b][j]) * tph[b];
       const a = Math.min(1, Math.abs(S * 0.5) * gain);
       let r, gr, bl;
-      if(a < 0.045){ r = 234; gr = 226; bl = 200; }   // linea nodale = "sabbia" pallida
+      if(a < 0.032){ r = 234; gr = 226; bl = 200; }   // linea nodale = "sabbia" pallida (più sottile)
       else {
         const warm = S >= 0;
         const hue = warm ? warmHue : coolHue;          // mappa divergente caldo/freddo
@@ -527,7 +527,9 @@ function initNeural(){
 
 function stepNeural(g, bg){
   if(!neuralNodes.length) initNeural();
-  const act = activation, t = zoff, baseHue = moodHue();
+  // Palette elettrica: ciano(freddo) -> rosso(caldo) passando per blu/viola/
+  // magenta, evitando la zona verde/giallo "spenta" del moodHue a metà scala.
+  const act = activation, t = zoff, baseHue = 190 + warmth * 165;
   g.noStroke();
   g.fill(bg[0], bg[1], Math.max(3, bg[2]), 26);        // velo scuro -> scie
   g.rect(0, 0, ART_W, ART_H);
@@ -659,17 +661,20 @@ function initMandala(){
   const rng = mulberry32((seed >>> 0) || 1);
   const K = 6 + Math.floor(rng() * 11);               // ordine simmetria 6..16
   const wedge = TWO_PI / K;
-  const nrings = 4 + Math.floor(rng() * 5);           // 4..8 anelli di motivi
+  const nrings = 6 + Math.floor(rng() * 5);           // 6..10 anelli di motivi
   const types = ['circle', 'petal', 'arc', 'ray', 'dot'];
   const els = [];
+  // motivo centrale (disco + corona di petali) per ancorare il centro
+  els.push({ rad: 0.0, ang: 0, type: 'circle', size: 0.06, band: Math.floor(rng() * 5), mir: false });
+  els.push({ rad: 0.07, ang: rng() * wedge * 0.5, type: 'petal', size: 0.045, band: Math.floor(rng() * 5), mir: true });
   for(let ring = 0; ring < nrings; ring++){
-    const rad = 0.12 + ring * (0.82 / nrings) + rng() * 0.04;
-    const count = 1 + Math.floor(rng() * 3);
+    const rad = 0.1 + ring * (0.86 / nrings) + rng() * 0.03;
+    const count = 2 + Math.floor(rng() * 3);          // 2..4 elementi per anello
     for(let c = 0; c < count; c++){
       els.push({
         rad, ang: rng() * wedge * 0.5,
         type: types[Math.floor(rng() * types.length)],
-        size: 0.02 + rng() * 0.06, band: Math.floor(rng() * 5), mir: rng() < 0.7
+        size: 0.025 + rng() * 0.06, band: Math.floor(rng() * 5), mir: rng() < 0.75
       });
     }
   }
@@ -708,7 +713,7 @@ function stepMandala(g, bg){
   if(!mandala.els.length) initMandala();
   const act = activation, t = zoff, K = mandala.K;
   const A = [powers.delta, powers.theta, powers.alpha, powers.beta, powers.gamma];
-  const maxR = Math.min(ART_W, ART_H) * 0.46;
+  const maxR = Math.min(ART_W, ART_H) * 0.48;
   g.push();
   g.noStroke(); g.fill(bg[0], bg[1], Math.max(4, bg[2]), 100); g.rect(0, 0, ART_W, ART_H); // fondo pulito
   g.translate(ART_W / 2, ART_H / 2);
