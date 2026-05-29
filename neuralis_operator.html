@@ -73,7 +73,7 @@
   .feedback{margin-top:16px;min-height:24px;font-weight:600}
   .feedback.ok{color:var(--green)} .feedback.info{color:var(--accent)} .feedback.err{color:var(--red)}
   .hint{color:var(--muted);font-size:12px;font-weight:500}
-  .mode-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:12px}
+  .mode-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-top:12px}
   .btn-mode{font-size:12px;padding:14px 10px;letter-spacing:1.5px}
   .btn-mode.active{border-color:#6ea8ff;color:#6ea8ff;background:linear-gradient(180deg,#0e1830,#091020)}
 </style>
@@ -133,6 +133,10 @@
         <button id="btnFlowField" class="btn-mode active">Flow Field</button>
         <button id="btnMaxFlow" class="btn-mode">Max Flow</button>
         <button id="btnKandinsky" class="btn-mode">Kandinsky</button>
+        <button id="btnCymatics" class="btn-mode">Cimatica</button>
+        <button id="btnNeural" class="btn-mode">Costellazione</button>
+        <button id="btnVoronoi" class="btn-mode">Mosaico</button>
+        <button id="btnMandala" class="btn-mode">Mandala</button>
       </div>
       <p class="hint" style="margin-top:12px">Flusso: <b>Congela</b> il quadro, mostralo e spiegalo, poi <b>Stampa</b>.</p>
       <div class="feedback" id="feedback"></div>
@@ -264,6 +268,10 @@
     $("btnFlowField").classList.toggle("active", m === "flowfield");
     $("btnMaxFlow").classList.toggle("active", m === "maxflow");
     $("btnKandinsky").classList.toggle("active", m === "kandinsky");
+    $("btnCymatics").classList.toggle("active", m === "cymatics");
+    $("btnNeural").classList.toggle("active", m === "neural");
+    $("btnVoronoi").classList.toggle("active", m === "voronoi");
+    $("btnMandala").classList.toggle("active", m === "mandala");
   }
   $("btnFlowField").addEventListener("click", ()=>{
     if(sendObj({cmd:"anim_mode",value:"flowfield"})){ setAnimMode("flowfield"); fb("Flow Field attivo.","info"); }
@@ -273,6 +281,18 @@
   });
   $("btnKandinsky").addEventListener("click", ()=>{
     if(sendObj({cmd:"anim_mode",value:"kandinsky"})){ setAnimMode("kandinsky"); fb("Kandinsky attivo.","info"); }
+  });
+  $("btnCymatics").addEventListener("click", ()=>{
+    if(sendObj({cmd:"anim_mode",value:"cymatics"})){ setAnimMode("cymatics"); fb("Cimatica attiva.","info"); }
+  });
+  $("btnNeural").addEventListener("click", ()=>{
+    if(sendObj({cmd:"anim_mode",value:"neural"})){ setAnimMode("neural"); fb("Costellazione neurale attiva.","info"); }
+  });
+  $("btnVoronoi").addEventListener("click", ()=>{
+    if(sendObj({cmd:"anim_mode",value:"voronoi"})){ setAnimMode("voronoi"); fb("Mosaico attivo.","info"); }
+  });
+  $("btnMandala").addEventListener("click", ()=>{
+    if(sendObj({cmd:"anim_mode",value:"mandala"})){ setAnimMode("mandala"); fb("Mandala attivo.","info"); }
   });
 
   connect();

@@ -76,6 +76,10 @@ function initParticles(){
 // Inizializza la struttura adeguata al modo attivo.
 function initForMode(){
   if(animMode === 'kandinsky') initKandinsky();
+  else if(animMode === 'cymatics') initCymatics();
+  else if(animMode === 'neural') initNeural();
+  else if(animMode === 'voronoi') initVoronoi();
+  else if(animMode === 'mandala') initMandala();
   else initParticles();
 }
 
@@ -126,6 +130,10 @@ function draw(){
   if(!hasSignature){ drawWaiting(); return; }
   if(!frozen){
     if(animMode === 'kandinsky') stepKandinsky(artBuf, bg);
+    else if(animMode === 'cymatics') stepCymatics(artBuf, bg);
+    else if(animMode === 'neural') stepNeural(artBuf, bg);
+    else if(animMode === 'voronoi') stepVoronoi(artBuf, bg);
+    else if(animMode === 'mandala') stepMandala(artBuf, bg);
     else if(animMode === 'maxflow') stepMaxFlow(artBuf, bg);
     else stepFlowField(artBuf, bg);
   }
@@ -267,10 +275,22 @@ function pickKType(rng){
   return "circle";
 }
 
-function makeKShape(rng, type){
-  const s = { type, x: rng() * ART_W, y: rng() * ART_H, rot: rng() * TWO_PI,
-              rotSpd: (rng() * 2 - 1) * 0.5, phase: rng() * TWO_PI,
-              drift: rng(), dphase: rng() * TWO_PI };
+// Configura/riconfigura una figura. Riusata sia alla creazione (rng seedato)
+// sia alla RINASCITA (rng = Math.random, tipo dalle bande correnti) -> ricambio.
+function configureKShape(rng, s, type){
+  s.type = type;
+  s.x = rng() * ART_W; s.y = rng() * ART_H;
+  s.rot = rng() * TWO_PI;
+  s.rotSpd = (rng() * 2 - 1) * 1.6;             // rotazione più decisa
+  s.phase = rng() * TWO_PI; s.dphase = rng() * TWO_PI;
+  const dir = rng() * TWO_PI, sp = 0.6 + rng() * 1.8;
+  s.vx = Math.cos(dir) * sp; s.vy = Math.sin(dir) * sp; // traslazione (scalata da activation)
+  s.pulseAmp = 0.08 + rng() * 0.26;             // respiro di scala
+  s.pulseSpd = 0.6 + rng() * 1.8;
+  s.life = 0;                                   // ciclo di vita -> comparsa/scomparsa
+  s.fadeIn = 8 + Math.floor(rng() * 14);
+  const base = lerp(210, 70, activation);       // più attivo -> ricambio più rapido
+  s.max = Math.floor(base * (0.55 + rng() * 0.9));
   let pal;
   if(type === "circle"){ pal = rng() < 0.8 ? FAM.blue : FAM.cyan; s.r = 38 + rng() * 190; s.rings = 1 + Math.floor(rng() * 4); }
   else if(type === "tri"){ pal = FAM.yellow; s.r = 28 + rng() * 120; }
@@ -287,21 +307,27 @@ function makeKShape(rng, type){
   s.sortR = type === "line" ? s.len * 0.5 : (type === "dot" ? s.r * 0.4 : s.r);
   return s;
 }
+function makeKShape(rng, type){ return configureKShape(rng, {}, type); }
 
 function initKandinsky(){
   const rng = mulberry32((seed >>> 0) || 1);                   // stessa firma -> stessa tela
   const base = 240 + Math.floor(rng() * 120);                  // 240..360 figure
   const count = Math.min(560, base + Math.floor(activation * 140)); // quantita' alta
   kShapes = [];
-  for(let i = 0; i < count; i++) kShapes.push(makeKShape(rng, pickKType(rng)));
+  for(let i = 0; i < count; i++){
+    const s = makeKShape(rng, pickKType(rng));
+    s.life = Math.floor(rng() * s.max);                        // sfasa i cicli di vita (niente blink globale)
+    kShapes.push(s);
+  }
   kShapes.sort((p, q) => q.sortR - p.sortR);                   // grandi dietro, accenti davanti
   clearArt();
 }
 
-function drawKShape(g, s, tt, act){
+function drawKShape(g, s, tt, act, env){
   // Le forme della temperatura dominante "respirano" col mood (warmth).
+  // env (0..1) = dissolvenza del ciclo di vita -> modula l'opacità.
   const emph = s.neutral ? 0.82 : (s.warmFam ? warmth : 1 - warmth);
-  const alpha = 66 + 30 * emph;
+  const A = (66 + 30 * emph) * env;
   const h = s.col[0];
   const sat = Math.min(100, s.col[1] * (0.82 + 0.25 * act));   // activation -> piu' vivido
   const br = s.col[2];
@@ -311,14 +337,14 @@ function drawKShape(g, s, tt, act){
     const R = s.r * breath;
     for(let k = 0; k < s.rings; k++){
       const rr = R * (1 - k / s.rings);
-      if(k % 2 === 0){ g.noStroke(); g.fill(h, sat, br, alpha * (0.55 + 0.45 * (1 - k / s.rings))); g.ellipse(0, 0, rr * 2, rr * 2); }
-      else { g.noFill(); g.stroke(0, 0, 12, 60); g.strokeWeight(2.2); g.ellipse(0, 0, rr * 2, rr * 2); }
+      if(k % 2 === 0){ g.noStroke(); g.fill(h, sat, br, A * (0.55 + 0.45 * (1 - k / s.rings))); g.ellipse(0, 0, rr * 2, rr * 2); }
+      else { g.noFill(); g.stroke(0, 0, 12, 60 * env); g.strokeWeight(2.2); g.ellipse(0, 0, rr * 2, rr * 2); }
     }
   } else if(s.type === "tri"){
     const r = s.r;
-    g.noStroke(); g.fill(h, sat, br, alpha);
+    g.noStroke(); g.fill(h, sat, br, A);
     g.triangle(0, -r, r * 0.866, r * 0.5, -r * 0.866, r * 0.5);
-    g.noFill(); g.stroke(0, 0, 12, 45); g.strokeWeight(1.6);
+    g.noFill(); g.stroke(0, 0, 12, 45 * env); g.strokeWeight(1.6);
     g.triangle(0, -r, r * 0.866, r * 0.5, -r * 0.866, r * 0.5);
   } else if(s.type === "square"){
     g.rectMode(CENTER);
@@ -326,24 +352,24 @@ function drawKShape(g, s, tt, act){
       const q = s.r / 2;
       for(let ix = 0; ix < 2; ix++) for(let iy = 0; iy < 2; iy++){
         const on = (ix + iy) % 2 === 0;
-        g.noStroke(); g.fill(h, sat, on ? br : br * 0.5, alpha);
+        g.noStroke(); g.fill(h, sat, on ? br : br * 0.5, A);
         g.rect(-q / 2 + ix * q, -q / 2 + iy * q, q, q);
       }
     } else {
-      g.noStroke(); g.fill(h, sat, br, alpha); g.rect(0, 0, s.r, s.r);
-      g.noFill(); g.stroke(0, 0, 12, 40); g.strokeWeight(1.6); g.rect(0, 0, s.r, s.r);
+      g.noStroke(); g.fill(h, sat, br, A); g.rect(0, 0, s.r, s.r);
+      g.noFill(); g.stroke(0, 0, 12, 40 * env); g.strokeWeight(1.6); g.rect(0, 0, s.r, s.r);
     }
   } else if(s.type === "line"){                                // movimento/tensione
-    g.rectMode(CENTER); g.noStroke(); g.fill(h, sat, br, Math.min(100, alpha + 8));
+    g.rectMode(CENTER); g.noStroke(); g.fill(h, sat, br, Math.min(100, A + 8));
     g.rect(0, 0, s.len, s.thick, s.thick * 0.5);
-    if(s.node){ g.fill(s.nodeCol[0], s.nodeCol[1], s.nodeCol[2], 95); g.ellipse(s.len / 2, 0, s.thick * 2.6, s.thick * 2.6); }
+    if(s.node){ g.fill(s.nodeCol[0], s.nodeCol[1], s.nodeCol[2], 95 * env); g.ellipse(s.len / 2, 0, s.thick * 2.6, s.thick * 2.6); }
   } else if(s.type === "arc"){                                 // theta -> oscilla
     const sway = s.sweep * (0.85 + 0.15 * Math.sin(tt + s.phase) * (0.5 + Math.min(1, powers.theta * 3)));
-    g.noFill(); g.stroke(h, sat, br, alpha); g.strokeWeight(s.thick);
+    g.noFill(); g.stroke(h, sat, br, A); g.strokeWeight(s.thick);
     g.arc(0, 0, s.r * 2, s.r * 2, 0, sway);
   } else {                                                     // dot: gamma -> scintilla
     const tw = 1 + 0.5 * Math.sin(tt * 3 + s.phase) * Math.min(1, powers.gamma * 5);
-    g.noStroke(); g.fill(h, sat, br, alpha); g.ellipse(0, 0, s.r * 2 * tw, s.r * 2 * tw);
+    g.noStroke(); g.fill(h, sat, br, A); g.ellipse(0, 0, s.r * 2 * tw, s.r * 2 * tw);
   }
 }
 
@@ -358,20 +384,348 @@ function stepKandinsky(g, bg){
 
   const act = activation;
   const tt = zoff;
+  const travel = 0.5 + act * 2.6;                              // velocità di spostamento (activation)
   for(const s of kShapes){
-    const dr = 14 * s.drift * (0.4 + act);                     // deriva lieve (activation)
-    const x = s.x + Math.sin(tt * 0.5 + s.dphase) * dr;
-    const y = s.y + Math.cos(tt * 0.43 + s.dphase * 1.3) * dr;
-    let rot = s.rot + tt * s.rotSpd * (0.12 + act * 0.7);
-    if(s.type === "tri") rot += Math.sin(tt * 7 + s.phase) * 0.05 * Math.min(1, powers.beta * 3); // beta -> vibra
+    // ciclo di vita: invecchia e, a fine vita, RINASCE altrove con nuova identità
+    // (tipo/colore/dimensione dalle bande correnti) -> figure che vanno e vengono.
+    s.life++;
+    if(s.life >= s.max) configureKShape(Math.random, s, pickKType(Math.random));
+    // dissolvenza in entrata/uscita -> comparsa e scomparsa morbide
+    const fin = Math.min(1, s.life / s.fadeIn);
+    const fout = Math.min(1, (s.max - s.life) / Math.max(1, s.max * 0.28));
+    const env = Math.max(0, Math.min(fin, fout));
+    // traslazione vera e propria + wrap ai bordi
+    s.x += s.vx * travel; s.y += s.vy * travel;
+    if(s.x < -80) s.x = ART_W + 80; else if(s.x > ART_W + 80) s.x = -80;
+    if(s.y < -80) s.y = ART_H + 80; else if(s.y > ART_H + 80) s.y = -80;
+    const x = s.x + Math.sin(tt * 0.8 + s.dphase) * 12 * (0.4 + act);
+    const y = s.y + Math.cos(tt * 0.7 + s.dphase * 1.3) * 12 * (0.4 + act);
+    let rot = s.rot + tt * s.rotSpd * (0.25 + act * 1.4);
+    if(s.type === "tri") rot += Math.sin(tt * 9 + s.phase) * 0.12 * Math.min(1, powers.beta * 3); // beta -> vibra
+    const sc = 1 + s.pulseAmp * Math.sin(tt * s.pulseSpd + s.phase);  // respiro di scala
     g.push();
     g.translate(x, y);
     g.rotate(rot);
-    drawKShape(g, s, tt, act);
+    g.scale(sc);
+    drawKShape(g, s, tt, act, env);
     g.pop();
   }
   g.pop();
-  zoff += lerp(0.004, 0.018, act);
+  zoff += lerp(0.01, 0.04, act);                               // tempo più rapido
+}
+
+// ---- cimatica: figure di Chladni dalle frequenze EEG ----------------------
+// Il campo S(u,v,t) somma, per banda, i modi di una piastra quadrata vibrante
+// (formula di Chladni); ampiezza = potenza della banda LIVE, numeri d'onda e
+// fasi dalla firma. |S|~0 = linea nodale ("sabbia"); antinodi = colore (segno
+// di S -> tinta calda/fredda). Calcolato su griglia ridotta e upscalato.
+const CYM_W = 320, CYM_H = 180;
+let cymBuf = null, cymModes = [];
+
+// HSB(0-360,0-100,0-100) -> RGB(0-255) per scrittura diretta nei pixel.
+function hsb2rgb(h, s, b){
+  h = ((h % 360) + 360) % 360; s /= 100; b /= 100;
+  const c = b * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = b - c;
+  let r, g, l;
+  if(h < 60){ r = c; g = x; l = 0; }
+  else if(h < 120){ r = x; g = c; l = 0; }
+  else if(h < 180){ r = 0; g = c; l = x; }
+  else if(h < 240){ r = 0; g = x; l = c; }
+  else if(h < 300){ r = x; g = 0; l = c; }
+  else { r = c; g = 0; l = x; }
+  return [(r + m) * 255, (g + m) * 255, (l + m) * 255];
+}
+
+function initCymatics(){
+  if(!cymBuf){ cymBuf = createGraphics(CYM_W, CYM_H); cymBuf.pixelDensity(1); }
+  const rng = mulberry32((seed >>> 0) || 1);          // numeri d'onda/fasi dalla firma
+  const baseN = [1, 2, 3, 5, 8], baseM = [2, 3, 4, 7, 11]; // delta..gamma, crescenti
+  cymModes = [];
+  for(let b = 0; b < 5; b++){
+    const n = Math.max(1, baseN[b] + (Math.floor(rng() * 3) - 1)); // +/-1
+    const m = Math.max(1, baseM[b] + (Math.floor(rng() * 3) - 1));
+    cymModes.push({ n, m, phi: rng() * TWO_PI, w: 0.12 + rng() * 0.5 });
+  }
+}
+
+function stepCymatics(g, bg){
+  if(!cymBuf || !cymModes.length) initCymatics();
+  const t = zoff, act = activation;
+  const A = [powers.delta, powers.theta, powers.alpha, powers.beta, powers.gamma];
+  const tph = cymModes.map(md => Math.cos(md.phi + t * md.w));   // evoluzione temporale
+  // Separabilita': precalcolo i coseni per colonne/righe -> per-cella solo prodotti.
+  const cuN = [], cuM = [], rvN = [], rvM = [];
+  for(let b = 0; b < 5; b++){
+    const n = cymModes[b].n, m = cymModes[b].m;
+    const an = new Float32Array(CYM_W), am = new Float32Array(CYM_W);
+    for(let i = 0; i < CYM_W; i++){ const u = i / (CYM_W - 1); an[i] = Math.cos(n * Math.PI * u); am[i] = Math.cos(m * Math.PI * u); }
+    const bn = new Float32Array(CYM_H), bm = new Float32Array(CYM_H);
+    for(let j = 0; j < CYM_H; j++){ const v = j / (CYM_H - 1); bn[j] = Math.cos(n * Math.PI * v); bm[j] = Math.cos(m * Math.PI * v); }
+    cuN.push(an); cuM.push(am); rvN.push(bn); rvM.push(bm);
+  }
+  const warmHue = lerp(44, 8, warmth);                // ambra -> rosso col calore
+  const coolHue = lerp(192, 224, warmth);             // ciano -> indaco col freddo
+  const gain = 1.4 + act * 0.9;
+  cymBuf.loadPixels();
+  const px = cymBuf.pixels;
+  for(let j = 0; j < CYM_H; j++){
+    for(let i = 0; i < CYM_W; i++){
+      let S = 0;
+      for(let b = 0; b < 5; b++) S += A[b] * (cuN[b][i] * rvM[b][j] - cuM[b][i] * rvN[b][j]) * tph[b];
+      const a = Math.min(1, Math.abs(S * 0.5) * gain);
+      let r, gr, bl;
+      if(a < 0.045){ r = 234; gr = 226; bl = 200; }   // linea nodale = "sabbia" pallida
+      else {
+        const warm = S >= 0;
+        const hue = warm ? warmHue : coolHue;          // mappa divergente caldo/freddo
+        const emph = warm ? (0.8 + 0.32 * warmth) : (0.8 + 0.32 * (1 - warmth));
+        const bri = Math.min(100, (16 + 80 * Math.pow(a, 0.8)) * emph);
+        [r, gr, bl] = hsb2rgb(hue, 72 + 26 * a, bri);
+      }
+      const idx = (j * CYM_W + i) * 4;
+      px[idx] = r; px[idx + 1] = gr; px[idx + 2] = bl; px[idx + 3] = 255;
+    }
+  }
+  cymBuf.updatePixels();
+  g.image(cymBuf, 0, 0, ART_W, ART_H);                // upscale 8x sul buffer di stampa
+  zoff += lerp(0.01, 0.05, act);
+}
+
+// ---- costellazione neurale: il cervello come rete -------------------------
+// Nodi (neuroni) seedati dalla firma, collegati ai vicini; impulsi che corrono
+// lungo le sinapsi accendendole. alpha->glow/respiro, beta->tasso di scariche
+// e propagazione a catena, activation->velocità/energia, gamma->sfarfallio.
+let neuralNodes = [], neuralEdges = [], neuralPulses = [];
+
+function initNeural(){
+  const rng = mulberry32((seed >>> 0) || 1);
+  const N = 90 + Math.floor(rng() * 60);              // 90..150 neuroni
+  neuralNodes = [];
+  for(let i = 0; i < N; i++){
+    neuralNodes.push({
+      x: 70 + rng() * (ART_W - 140), y: 70 + rng() * (ART_H - 140),
+      r: 4 + rng() * 9, phase: rng() * TWO_PI, hueJ: rng() * 40 - 20, lvl: 0
+    });
+  }
+  neuralEdges = [];
+  const k = 3;                                         // ~3 vicini più prossimi
+  for(let i = 0; i < N; i++){
+    const d = [];
+    for(let j = 0; j < N; j++) if(j !== i){
+      const dx = neuralNodes[i].x - neuralNodes[j].x, dy = neuralNodes[i].y - neuralNodes[j].y;
+      d.push([dx * dx + dy * dy, j]);
+    }
+    d.sort((a, b) => a[0] - b[0]);
+    for(let m = 0; m < k && m < d.length; m++){
+      const j = d[m][1], a = Math.min(i, j), b = Math.max(i, j);
+      if(!neuralEdges.some(e => e.a === a && e.b === b)) neuralEdges.push({ a, b });
+    }
+  }
+  neuralPulses = [];
+  clearArt();
+}
+
+function stepNeural(g, bg){
+  if(!neuralNodes.length) initNeural();
+  const act = activation, t = zoff, baseHue = moodHue();
+  g.noStroke();
+  g.fill(bg[0], bg[1], Math.max(3, bg[2]), 26);        // velo scuro -> scie
+  g.rect(0, 0, ART_W, ART_H);
+
+  // sinapsi (si accendono se un nodo collegato è attivo)
+  g.strokeWeight(1.2);
+  for(const e of neuralEdges){
+    const a = neuralNodes[e.a], b = neuralNodes[e.b];
+    const lv = Math.max(a.lvl, b.lvl);
+    g.stroke(baseHue, 28, 40 + 50 * lv, 9 + 38 * lv);
+    g.line(a.x, a.y, b.x, b.y);
+  }
+
+  // scariche: tasso ~ beta * activation
+  let toSpawn = powers.beta * (0.4 + act) * 2.4;
+  while(toSpawn > 0 && neuralEdges.length){
+    if(Math.random() < toSpawn){
+      const e = neuralEdges[Math.floor(Math.random() * neuralEdges.length)];
+      neuralPulses.push({ e, p: 0, dir: Math.random() < 0.5 ? 1 : -1, spd: 0.012 + act * 0.045 });
+    }
+    toSpawn -= 1;
+  }
+  const keep = [];
+  for(const pu of neuralPulses){
+    pu.p += pu.spd;
+    const a = neuralNodes[pu.e.a], b = neuralNodes[pu.e.b];
+    const f = pu.dir > 0 ? pu.p : 1 - pu.p;
+    const x = lerp(a.x, b.x, f), y = lerp(a.y, b.y, f);
+    g.noStroke();
+    g.fill((baseHue + 30) % 360, 60, 100, 80); g.circle(x, y, 9);  // alone impulso
+    g.fill(42, 18, 100, 95);                   g.circle(x, y, 4);  // nucleo caldo-bianco
+    if(pu.p >= 1){
+      const dest = pu.dir > 0 ? pu.e.b : pu.e.a;
+      neuralNodes[dest].lvl = 1;                                    // accende il neurone
+      if(Math.random() < powers.beta * 1.6){                       // propagazione a catena
+        const out = neuralEdges.filter(ed => ed.a === dest || ed.b === dest);
+        if(out.length){ const ne = out[Math.floor(Math.random() * out.length)]; neuralPulses.push({ e: ne, p: 0, dir: ne.a === dest ? 1 : -1, spd: pu.spd }); }
+      }
+    } else keep.push(pu);
+  }
+  neuralPulses = keep.length > 600 ? keep.slice(keep.length - 600) : keep;
+
+  // neuroni
+  for(const nd of neuralNodes){
+    const breathe = 0.5 + 0.5 * Math.sin(t * 1.5 + nd.phase);
+    const flick = 1 + 0.4 * Math.sin(t * 9 + nd.phase) * Math.min(1, powers.gamma * 5);
+    const glowA = 8 + powers.alpha * 42 + nd.lvl * 50;
+    const hue = (baseHue + nd.hueJ + 360) % 360;
+    g.noStroke();
+    g.fill(hue, 70, 100, glowA);              g.circle(nd.x, nd.y, nd.r * 4 * flick);              // alone
+    g.fill(hue, 55, 100, 70 + 30 * nd.lvl);   g.circle(nd.x, nd.y, nd.r * (1.2 + 0.5 * breathe) * flick); // corpo
+    nd.lvl *= 0.92;                                                 // decadimento accensione
+  }
+  zoff += lerp(0.01, 0.05, act);
+}
+
+// ---- mosaico/vetrata (Voronoi): tessuto di tessere colorate ---------------
+// Lo spazio è diviso in celle attorno a siti seedati dalla firma, che derivano
+// lentamente. Ogni tessera rappresenta una banda EEG: tinta dalla banda,
+// luminosità dalla sua potenza LIVE (banda dominante -> tessere accese). I
+// bordi (cambio di proprietario) sono scuri = piombatura da vetrata.
+const VOR_W = 192, VOR_H = 108;
+const VOR_BANDHUE = [222, 168, 40, 6, 300];           // delta,theta,alpha,beta,gamma
+const VOR_WARMBAND = [false, false, true, true, true];
+let vorBuf = null, vorSites = [], vorOwner = null;
+
+function initVoronoi(){
+  if(!vorBuf){ vorBuf = createGraphics(VOR_W, VOR_H); vorBuf.pixelDensity(1); }
+  if(!vorOwner) vorOwner = new Int16Array(VOR_W * VOR_H);
+  const rng = mulberry32((seed >>> 0) || 1);
+  const M = 38 + Math.floor(rng() * 28);              // 38..66 tessere
+  vorSites = [];
+  for(let i = 0; i < M; i++){
+    const ang = rng() * TWO_PI, sp = 0.15 + rng() * 0.5;
+    vorSites.push({ x: rng() * VOR_W, y: rng() * VOR_H,
+      vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+      band: Math.floor(rng() * 5), hueJ: rng() * 16 - 8, phase: rng() * TWO_PI });
+  }
+  clearArt();
+}
+
+function stepVoronoi(g, bg){
+  if(!vorBuf || !vorSites.length) initVoronoi();
+  const act = activation, t = zoff, M = vorSites.length, drift = 0.2 + act * 1.1;
+  for(const s of vorSites){                            // deriva lenta + rimbalzo ai bordi
+    s.x += s.vx * drift; s.y += s.vy * drift;
+    if(s.x < 0){ s.x = 0; s.vx *= -1; } else if(s.x > VOR_W){ s.x = VOR_W; s.vx *= -1; }
+    if(s.y < 0){ s.y = 0; s.vy *= -1; } else if(s.y > VOR_H){ s.y = VOR_H; s.vy *= -1; }
+  }
+  const A = [powers.delta, powers.theta, powers.alpha, powers.beta, powers.gamma];
+  const cols = vorSites.map(s => {                     // colore tessera: banda + potenza live
+    const breathe = 0.85 + 0.15 * Math.sin(t * 1.3 + s.phase) * Math.min(1, powers.alpha * 3);
+    const pw = A[s.band];
+    const emph = VOR_WARMBAND[s.band] ? (0.72 + 0.5 * warmth) : (0.72 + 0.5 * (1 - warmth));
+    const sat = 55 + 40 * Math.min(1, pw * 3);
+    const bri = Math.min(100, (30 + 62 * Math.min(1, pw * 3.2)) * breathe * emph);
+    return hsb2rgb((VOR_BANDHUE[s.band] + s.hueJ + 360) % 360, sat, bri);
+  });
+  const owner = vorOwner;                              // nearest-site su griglia ridotta
+  for(let j = 0; j < VOR_H; j++) for(let i = 0; i < VOR_W; i++){
+    let best = 0, bd = 1e9;
+    for(let m = 0; m < M; m++){ const dx = i - vorSites[m].x, dy = j - vorSites[m].y; const d = dx*dx + dy*dy; if(d < bd){ bd = d; best = m; } }
+    owner[j * VOR_W + i] = best;
+  }
+  vorBuf.loadPixels();
+  const px = vorBuf.pixels;
+  for(let j = 0; j < VOR_H; j++) for(let i = 0; i < VOR_W; i++){
+    const o = owner[j * VOR_W + i];
+    const border = (i + 1 < VOR_W && owner[j * VOR_W + i + 1] !== o) || (j + 1 < VOR_H && owner[(j + 1) * VOR_W + i] !== o);
+    const idx = (j * VOR_W + i) * 4;
+    if(border){ px[idx] = 14; px[idx + 1] = 12; px[idx + 2] = 20; }   // piombatura scura
+    else { const c = cols[o]; px[idx] = c[0]; px[idx + 1] = c[1]; px[idx + 2] = c[2]; }
+    px[idx + 3] = 255;
+  }
+  vorBuf.updatePixels();
+  g.image(vorBuf, 0, 0, ART_W, ART_H);                 // upscale 10x sul buffer di stampa
+  zoff += lerp(0.004, 0.02, act);
+}
+
+// ---- mandala / caleidoscopio: simmetria radiale dalla firma ---------------
+// Ordine di simmetria K e motivo seedati dalla firma. Un settore disegnato e
+// replicato per rotazione + riflessione (diedrale). Elementi colorati per
+// banda: la potenza LIVE ne regola visibilità/dimensione. alpha->respiro,
+// beta->rotazione e raggi, theta->archi, activation->velocità.
+const MAND_HUE = [222, 168, 40, 6, 300];              // delta,theta,alpha,beta,gamma
+let mandala = { K: 8, els: [] };
+
+function initMandala(){
+  const rng = mulberry32((seed >>> 0) || 1);
+  const K = 6 + Math.floor(rng() * 11);               // ordine simmetria 6..16
+  const wedge = TWO_PI / K;
+  const nrings = 4 + Math.floor(rng() * 5);           // 4..8 anelli di motivi
+  const types = ['circle', 'petal', 'arc', 'ray', 'dot'];
+  const els = [];
+  for(let ring = 0; ring < nrings; ring++){
+    const rad = 0.12 + ring * (0.82 / nrings) + rng() * 0.04;
+    const count = 1 + Math.floor(rng() * 3);
+    for(let c = 0; c < count; c++){
+      els.push({
+        rad, ang: rng() * wedge * 0.5,
+        type: types[Math.floor(rng() * types.length)],
+        size: 0.02 + rng() * 0.06, band: Math.floor(rng() * 5), mir: rng() < 0.7
+      });
+    }
+  }
+  mandala = { K, els };
+  clearArt();
+}
+
+function drawMandalaEl(g, el, maxR, breath, t, A, sign){
+  const ang = el.ang * sign;
+  const r = el.rad * maxR * breath;
+  const x = r * Math.cos(ang), y = r * Math.sin(ang);
+  const pw = A[el.band];
+  const vis = 0.3 + 0.7 * Math.min(1, pw * 3.2);       // banda dominante -> più visibile
+  const hue = MAND_HUE[el.band];
+  const sat = 70 + 26 * Math.min(1, pw * 3);
+  const bri = 60 + 40 * vis, aA = 35 + 60 * vis;
+  const sz = el.size * maxR * (0.6 + 0.8 * vis) * breath;
+  g.push();
+  g.translate(x, y);
+  g.rotate(ang + Math.PI / 2);                          // orienta radialmente
+  if(el.type === 'circle'){ g.noStroke(); g.fill(hue, sat, bri, aA); g.circle(0, 0, sz * 2); }
+  else if(el.type === 'dot'){ g.noStroke(); g.fill(hue, sat, 100, aA); g.circle(0, 0, sz); }
+  else if(el.type === 'petal'){ g.noStroke(); g.fill(hue, sat, bri, aA); g.ellipse(0, 0, sz * 0.8, sz * 2.2); }
+  else if(el.type === 'ray'){                           // beta -> raggi lunghi
+    const len = sz * (1.5 + powers.beta * 4);
+    g.noStroke(); g.rectMode(CENTER); g.fill(hue, sat, bri, aA);
+    g.rect(0, 0, Math.max(2, sz * 0.25), len, sz * 0.1);
+  } else {                                              // arc
+    g.noFill(); g.stroke(hue, sat, bri, aA); g.strokeWeight(Math.max(2, sz * 0.3));
+    g.arc(0, 0, sz * 2, sz * 2, 0, Math.PI * (0.6 + 0.4 * Math.sin(t + el.rad * 10)));
+  }
+  g.pop();
+}
+
+function stepMandala(g, bg){
+  if(!mandala.els.length) initMandala();
+  const act = activation, t = zoff, K = mandala.K;
+  const A = [powers.delta, powers.theta, powers.alpha, powers.beta, powers.gamma];
+  const maxR = Math.min(ART_W, ART_H) * 0.46;
+  g.push();
+  g.noStroke(); g.fill(bg[0], bg[1], Math.max(4, bg[2]), 100); g.rect(0, 0, ART_W, ART_H); // fondo pulito
+  g.translate(ART_W / 2, ART_H / 2);
+  g.rotate(t * (0.04 + powers.beta * 0.5 + act * 0.1));  // rotazione (beta/activation)
+  const breath = 1 + (0.05 + 0.08 * Math.min(1, powers.alpha * 3)) * Math.sin(t * 1.1); // respiro (alpha)
+  const wedge = TWO_PI / K;
+  for(let k = 0; k < K; k++){
+    g.push();
+    g.rotate(k * wedge);
+    for(const el of mandala.els){
+      drawMandalaEl(g, el, maxR, breath, t, A, 1);
+      if(el.mir) drawMandalaEl(g, el, maxR, breath, t, A, -1);  // riflessione -> diedrale
+    }
+    g.pop();
+  }
+  g.pop();
+  zoff += lerp(0.006, 0.03, act);
 }
 
 // ---- schermo di attesa (finche' non arriva la firma) ----------------------
