@@ -36,6 +36,7 @@ OPEN_BROWSERS="${NEURALIS_OPEN_BROWSERS:-1}"
 EXTRA="${NEURALIS_EXTRA:-}"
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 KIOSK_PROFILE="/tmp/neuralis-kiosk-profile"
+DASH_PROFILE="/tmp/neuralis-dashboard-profile"
 
 if [[ ! -x "$PYTHON" ]]; then
   echo "ERRORE: Python del venv non trovato in $PYTHON" >&2
@@ -69,11 +70,16 @@ OPERATOR_URL="file://${SCRIPT_DIR}/neuralis_operator.html?ws=${WS}"
 
 SERVER_PID=""
 KIOSK_PID=""
+DASH_PID=""
 cleanup() {
   echo ""
   echo "[neuralis] arresto..."
   [[ -n "$KIOSK_PID" ]] && kill "$KIOSK_PID" 2>/dev/null || true
+  [[ -n "$DASH_PID" ]] && kill "$DASH_PID" 2>/dev/null || true
   [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null || true
+  # rete di sicurezza: chiude eventuali finestre Chrome dedicate ancora aperte
+  pkill -f neuralis-kiosk-profile 2>/dev/null || true
+  pkill -f neuralis-dashboard-profile 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -103,7 +109,11 @@ else
       --autoplay-policy=no-user-gesture-required >/dev/null 2>&1 &
     KIOSK_PID=$!
     echo "[neuralis] apro la DASHBOARD operatore sul Mac..."
-    open -a "Google Chrome" "$OPERATOR_URL"
+    # Finestra-app dedicata (profilo separato): così il pulsante On-Off può
+    # chiuderla davvero (window.close funziona) e il cleanup può terminarla.
+    "$CHROME" --user-data-dir="$DASH_PROFILE" --no-first-run --no-default-browser-check \
+      --app="$OPERATOR_URL" >/dev/null 2>&1 &
+    DASH_PID=$!
   else
     echo "ATTENZIONE: Google Chrome non trovato. Apri manualmente:" >&2
     echo "  Visual (TV, kiosk):  $VISUAL_URL" >&2

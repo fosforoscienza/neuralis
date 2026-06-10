@@ -709,7 +709,17 @@ async def main():
             acq.stop()                         # rilascia il sensore (BLE)
         except Exception:
             pass
-        os._exit(0)                            # termina -> start.sh chiude il kiosk
+        # Chiude le finestre Chrome dedicate (TV kiosk + dashboard) in modo
+        # affidabile: il browser blocca window.close() su un tab normale, qui
+        # invece terminiamo i processi che usano i profili dedicati di start.sh.
+        import subprocess
+        for prof in ("neuralis-kiosk-profile", "neuralis-dashboard-profile"):
+            try:
+                subprocess.run(["pkill", "-f", prof],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        os._exit(0)                            # termina -> start.sh fa il resto
     hub.on_shutdown = _shutdown
 
     if args.printer:
