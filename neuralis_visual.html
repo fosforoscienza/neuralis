@@ -23,6 +23,7 @@ const HUE_WARM = 2, HUE_COLD = 210;
 
 let artBuf, ws;
 let warmth = 0.5, activation = 0.4, frozen = false;
+let signalOk = false;   // il quadro dipinge solo con buon contatto (gate qualità)
 let hasSignature = false, seed = null;
 
 // Parametri del campo di flusso, derivati dalla firma (unici per persona).
@@ -80,6 +81,7 @@ function initForMode(){
   else if(animMode === 'neural') initNeural();
   else if(animMode === 'voronoi') initVoronoi();
   else if(animMode === 'mandala') initMandala();
+  else if(animMode === 'fluid') initFluid();
   else initParticles();
 }
 
@@ -127,13 +129,14 @@ function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
 function draw(){
   const bg = bgColor();
   background(bg[0], bg[1], bg[2]);
-  if(!hasSignature){ drawWaiting(); return; }
+  if(!hasSignature || !signalOk){ drawWaiting(); return; }
   if(!frozen){
     if(animMode === 'kandinsky') stepKandinsky(artBuf, bg);
     else if(animMode === 'cymatics') stepCymatics(artBuf, bg);
     else if(animMode === 'neural') stepNeural(artBuf, bg);
     else if(animMode === 'voronoi') stepVoronoi(artBuf, bg);
     else if(animMode === 'mandala') stepMandala(artBuf, bg);
+    else if(animMode === 'fluid') stepFluid(artBuf, bg);
     else if(animMode === 'maxflow') stepMaxFlow(artBuf, bg);
     else stepFlowField(artBuf, bg);
   }
@@ -763,27 +766,166 @@ function stepMandala(g, bg){
   zoff += lerp(0.006, 0.03, act);
 }
 
-// ---- schermo di attesa (finche' non arriva la firma) ----------------------
+// ---- fluido: inchiostro su acqua (domain warping) -------------------------
+// Estetica "pigmento in acqua" tipo cover Floating Points / Pharaoh Sanders.
+// Tecnica: domain warping di Inigo Quilez. Per ogni pixel calcolo q = (fbm(p),
+// fbm(p+o1)), poi r = (fbm(p+4q+o2), fbm(p+4q+o3)), infine f = fbm(p+4r). La
+// LUT divergente trasforma (f, |q|) in coppia di colori blu profondo <-> ocra
+// dorata (palette derivata dalle cover degli album dell'utente). Il campo evolve
+// nel tempo (zoff) e dipende dalla firma (offsets unici per persona).
+// Buffer 480x270 -> upscale 4x liscio per coprire 1920x1080 senza pixelatura.
+const FL_W = 480, FL_H = 270;
+let flBuf = null, flLUT = null, flOff = null;
+
+// Hash-noise valore: deterministico in (xi, yi), interpolazione cubica (smoothstep).
+// Molto più veloce di p5.noise(): 4 hash + smoothstep, niente lookup interni.
+function flHash(x, y){
+  let h = (x * 374761393 + y * 668265263) | 0;
+  h = (h ^ (h >>> 13)) * 1274126177 | 0;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function flVNoise(x, y){
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = flHash(xi,     yi),     b = flHash(xi + 1, yi);
+  const c = flHash(xi,     yi + 1), d = flHash(xi + 1, yi + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+// fBm 3 ottave: dettaglio "denso" senza saturare la CPU.
+function flFbm(x, y){
+  let v = 0, amp = 0.5, f = 1;
+  for(let i = 0; i < 3; i++){
+    v += amp * flVNoise(x * f, y * f);
+    f *= 2; amp *= 0.5;
+  }
+  return v;
+}
+
+// LUT 1024 voci: x = f (0..1) longitudine palette; ricostruita ad ogni step
+// perché warmth è LIVE. Tre colonne chiave (R,G,B) interpolate per regione:
+//   0.00 -> blu profondo (#0a1c5c)
+//   0.35 -> blu acqua    (#3aa8e0)
+//   0.55 -> oro pallido  (#fff0c8)
+//   0.75 -> ambra calda  (#e0a040)
+//   1.00 -> bruno scuro  (#5a3010)
+// warmth sposta il "pivot" tra blu e ambra: caldo -> più ambra, freddo -> più blu.
+function buildFluidLUT(){
+  if(!flLUT) flLUT = new Uint8ClampedArray(1024 * 3);
+  // Stop calibrati sui frame: blu navy/cobalto + ocra/oro/ambra.
+  const stops = [
+    [0.00, [ 10,  28,  92]],  // blu profondo
+    [0.22, [ 28,  64, 168]],  // blu elettrico
+    [0.40, [ 58, 168, 224]],  // blu acqua
+    [0.52, [180, 220, 232]],  // ghiaccio
+    [0.58, [255, 240, 200]],  // oro chiaro
+    [0.72, [224, 160,  64]],  // ambra
+    [0.86, [180,  96,  32]],  // ocra bruciata
+    [1.00, [ 90,  48,  16]],  // bruno scuro
+  ];
+  // warmth modula la posizione del centro chiaro: più caldo -> più area ocra.
+  const shift = (warmth - 0.5) * 0.18;
+  for(let k = 0; k < 1024; k++){
+    let t = k / 1023 - shift;
+    if(t < 0) t = 0; else if(t > 1) t = 1;
+    // trova segmento
+    let i = 0;
+    while(i < stops.length - 2 && t > stops[i + 1][0]) i++;
+    const a = stops[i], b = stops[i + 1];
+    const u = (t - a[0]) / (b[0] - a[0]);
+    // smoothstep tra i due colori per transizioni morbide
+    const s = u * u * (3 - 2 * u);
+    const r = a[1][0] + (b[1][0] - a[1][0]) * s;
+    const g = a[1][1] + (b[1][1] - a[1][1]) * s;
+    const bl = a[1][2] + (b[1][2] - a[1][2]) * s;
+    flLUT[k * 3] = r; flLUT[k * 3 + 1] = g; flLUT[k * 3 + 2] = bl;
+  }
+}
+
+function initFluid(){
+  if(!flBuf){ flBuf = createGraphics(FL_W, FL_H); flBuf.pixelDensity(1); }
+  // Offset di domain warping seedati dalla firma -> ogni persona ha il suo "fluido".
+  const rng = mulberry32((seed >>> 0) || 1);
+  flOff = {
+    qx: rng() * 100, qy: rng() * 100,
+    rx: rng() * 100, ry: rng() * 100,
+    sx: rng() * 100, sy: rng() * 100,
+    // direzione di deriva nel campo (firma)
+    drift: rng() * TWO_PI,
+    // scala del campo: persone diverse -> grana diversa
+    scale: 1.6 + rng() * 1.4,
+  };
+  buildFluidLUT();
+  clearArt();
+}
+
+function stepFluid(g, bg){
+  if(!flBuf || !flOff) initFluid();
+  buildFluidLUT();                                         // warmth live -> LUT live
+  const act = activation, t = zoff;
+  // Velocità deriva: calmo -> lento, attivo -> più mosso. Distinta su x/y per evitare un solo asse.
+  const vx = Math.cos(flOff.drift) * (0.12 + act * 0.35);
+  const vy = Math.sin(flOff.drift) * (0.12 + act * 0.35);
+  // Intensità del warp: attivo -> pigmento più "sbattuto"; calmo -> nuvole più larghe.
+  const warp = 3.4 + act * 2.6;
+  // Scala spaziale del fbm sul buffer ridotto (più grande -> dettaglio più fine).
+  const S = flOff.scale * 0.012;
+  const buf = flBuf;
+  buf.loadPixels();
+  const px = buf.pixels;
+  const L = flLUT;
+  const oxQ = flOff.qx + t * vx, oyQ = flOff.qy + t * vy;
+  const oxR = flOff.rx - t * vy * 0.7, oyR = flOff.ry + t * vx * 0.7;
+  const oxS = flOff.sx + t * vx * 0.4, oyS = flOff.sy - t * vy * 0.4;
+  for(let j = 0; j < FL_H; j++){
+    const py0 = j * S;
+    let row = j * FL_W * 4;
+    for(let i = 0; i < FL_W; i++){
+      const px0 = i * S;
+      // Domain warping a 2 passaggi (Inigo Quilez).
+      const qx = flFbm(px0 + oxQ,         py0 + oyQ);
+      const qy = flFbm(px0 + oxQ + 5.2,   py0 + oyQ + 1.3);
+      const rx = flFbm(px0 + oxR + warp * qx + 1.7, py0 + oyR + warp * qy + 9.2);
+      const ry = flFbm(px0 + oxR + warp * qx + 8.3, py0 + oyR + warp * qy + 2.8);
+      let f  = flFbm(px0 + oxS + warp * rx,         py0 + oyS + warp * ry);
+      // Spinta del contrasto: f attorno a 0.5 -> espando dinamica per pieni saturi.
+      f = (f - 0.5) * 1.45 + 0.5;
+      if(f < 0) f = 0; else if(f > 1) f = 1;
+      // Mod. luminosità con |q| -> volumi/profondità (zone di pigmento più dense).
+      const dq = Math.abs(qx - 0.5) + Math.abs(qy - 0.5);
+      const li = (f * 1023) | 0;
+      const k = li * 3;
+      const sh = 0.86 + dq * 0.5;            // 0.86..~1.36
+      let r = L[k]     * sh;
+      let gr = L[k + 1] * sh;
+      let bl = L[k + 2] * sh;
+      if(r > 255) r = 255; if(gr > 255) gr = 255; if(bl > 255) bl = 255;
+      px[row] = r; px[row + 1] = gr; px[row + 2] = bl; px[row + 3] = 255;
+      row += 4;
+    }
+  }
+  buf.updatePixels();
+  g.image(buf, 0, 0, ART_W, ART_H);                      // upscale 4x liscio
+  zoff += lerp(0.012, 0.045, act);                       // evoluzione del campo
+}
+
+// ---- schermo di attesa: connessione persa / in attesa del segnale ----------
 function drawWaiting(){
   const cx = width / 2, cy = height / 2;
-  const p = 0.5 + 0.5 * Math.sin(frameCount * 0.025);
-  noFill();
-  for(let i = 0; i < 6; i++){
-    stroke(208, 38, 82, Math.max(0, 12 - i * 1.7));
-    strokeWeight(2);
-    const r = 70 + i * 46 + p * 22;
-    circle(cx, cy, r * 2);
-  }
-  for(let k = 0; k < 5; k++){
-    const a = frameCount * 0.01 + k * TWO_PI / 5;
-    const r = 150 + 30 * Math.sin(frameCount * 0.02 + k);
-    noStroke();
-    fill(40 + k * 20, 55, 100, 38);
-    circle(cx + r * Math.cos(a), cy + r * Math.sin(a), 6 + 3 * p);
-  }
+  const p = 0.5 + 0.5 * Math.sin(frameCount * 0.04);     // "respiro" lento
+  textAlign(CENTER, CENTER);
   noStroke();
-  fill(200, 30, 100, 25 + p * 30);
-  circle(cx, cy, 30 + p * 12);
+  // Titolo
+  textStyle(BOLD);
+  textSize(Math.min(width * 0.045, 72));
+  fill(12, 60, 100, 70 + p * 30);                        // ambra tenue, pulsante
+  text("Connessione persa", cx, cy - height * 0.045);
+  // Sottotitolo con puntini animati (riconnessione "in corso")
+  textStyle(NORMAL);
+  textSize(Math.min(width * 0.024, 34));
+  const dots = ".".repeat(1 + (Math.floor(frameCount / 22) % 3));
+  fill(210, 12, 88, 45 + p * 25);                        // grigio-azzurro tenue
+  text("Tentativo di riconnessione cerebrale" + dots, cx, cy + height * 0.04);
 }
 
 // ---- WebSocket con riconnessione automatica -------------------------------
@@ -799,6 +941,7 @@ function connectWS(){
     else if(m.cmd === "clear") clearArt();
     else if(m.cmd === "anim_mode"){ animMode = m.value || 'flowfield'; initForMode(); }
     else if(m.cmd === "new_session"){ hasSignature = false; seed = null; clearArt(); }
+    else if(m.cmd === "shutdown"){ try { window.close(); } catch(e){} }
   };
   ws.onclose = () => setTimeout(connectWS, 1500);
   ws.onerror = () => { try { ws.close(); } catch {} };
@@ -809,6 +952,16 @@ function handleFeatures(m){
   if(m.warmth != null) warmth = m.warmth;
   if(m.activation != null) activation = m.activation;
   frozen = !!m.frozen;
+  // Gate del quadro sulla qualità del segnale, con isteresi anti-sfarfallio:
+  // ferma sotto 0.35 di qualità media, riprende sopra 0.55 (o se il Muse cade).
+  if(m.muse_state && m.muse_state !== "connected"){
+    signalOk = false;
+  } else if(m.signal_quality){
+    const qs = Object.values(m.signal_quality);
+    const qMean = qs.length ? qs.reduce((a, b) => a + b, 0) / qs.length : 0;
+    if(signalOk && qMean < 0.35) signalOk = false;
+    else if(!signalOk && qMean > 0.55) signalOk = true;
+  }
   if(m.signature && m.signature.seed != null){
     if(!hasSignature || seed !== (m.signature.seed >>> 0)) applySignature(m.signature.seed);
   } else if(!m.signature && hasSignature){
@@ -818,9 +971,25 @@ function handleFeatures(m){
 
 // ---- export hi-res on demand: il buffer E' gia' a risoluzione di stampa ----
 function exportArtwork(){
+  // Guardia: niente stampa se il quadro non è "vivo" (sensore disconnesso o
+  // segnale assente) — evita di stampare un quadro vecchio o un foglio vuoto.
+  if(!hasSignature || !signalOk){
+    try { ws.send(JSON.stringify({ type: "print_unavailable",
+      reason: "Nessuna immagine da stampare: sensore non connesso o segnale assente." })); } catch(e){}
+    return;
+  }
   try {
-    const dataURL = artBuf.canvas.toDataURL("image/png");
-    ws.send(JSON.stringify({ type: "artwork_png", data: dataURL, w: ART_W, h: ART_H }));
+    // Stampa 10x15 (3:2): ritaglio al centro il buffer 16:9 così l'immagine
+    // riempie tutto il foglio (con Postcard.Fullbleed lato CUPS) senza bande.
+    const PRINT_AR = 3 / 2;                          // rapporto carta Postcard
+    let cw = ART_W, ch = Math.round(ART_W / PRINT_AR);
+    if(ch > ART_H){ ch = ART_H; cw = Math.round(ART_H * PRINT_AR); }  // -> 1620x1080
+    const cx = Math.round((ART_W - cw) / 2), cy = Math.round((ART_H - ch) / 2);
+    const tmp = document.createElement("canvas");
+    tmp.width = cw; tmp.height = ch;
+    tmp.getContext("2d").drawImage(artBuf.canvas, cx, cy, cw, ch, 0, 0, cw, ch);
+    const dataURL = tmp.toDataURL("image/png");
+    ws.send(JSON.stringify({ type: "artwork_png", data: dataURL, w: cw, h: ch }));
   } catch(err){
     console.error("export fallito:", err);
   }

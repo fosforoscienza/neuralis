@@ -122,6 +122,31 @@ def channel_quality(x: np.ndarray) -> float:
     return 0.0
 
 
+def estimate_bpm(ppg_ir: np.ndarray, fs: float):
+    """Stima il battito (bpm) dalla frequenza dominante del PPG in banda cardiaca.
+
+    Usa scipy (non BrainFlow) cosi' funziona identico per Muse reale e --simulate.
+    Banda 0.7-3.5 Hz = 42-210 bpm. Ritorna None se il segnale non e' utilizzabile.
+    """
+    if ppg_ir is None or len(ppg_ir) < int(fs * 2):
+        return None
+    x = np.asarray(ppg_ir, dtype=float)
+    x = x - np.mean(x)
+    if np.std(x) < 1e-6:
+        return None
+    # FFT con finestra di Hann e zero-padding: risoluzione fine (~0.5 bpm),
+    # contro i ~15 bpm/bin di welch su finestre corte.
+    xw = x * np.hanning(len(x))
+    nfft = 8192
+    spec = np.abs(np.fft.rfft(xw, n=nfft))
+    freqs = np.fft.rfftfreq(nfft, d=1.0 / fs)
+    band = (freqs >= 0.7) & (freqs <= 3.5)        # 42-210 bpm
+    if not band.any() or spec[band].max() <= 0:
+        return None
+    fpeak = float(freqs[band][np.argmax(spec[band])])
+    return fpeak * 60.0
+
+
 # --------------------------------------------------------------------------- #
 # Motore delle feature
 # --------------------------------------------------------------------------- #
@@ -229,9 +254,11 @@ class Acquirer:
     """Interfaccia comune. state: disconnected|connecting|connected."""
 
     fs = 256
+    fs_ppg = 64                  # sampling rate del PPG (sensore cardiaco)
 
     def __init__(self):
         self.state = "disconnected"
+        self.ppg_channels = None
 
     async def start(self):
         raise NotImplementedError
@@ -239,6 +266,14 @@ class Acquirer:
     def get_window(self, n: int) -> np.ndarray | None:
         """Restituisce un array (4, n) o None se i dati non sono pronti."""
         raise NotImplementedError
+
+    def get_ppg_window(self, n: int) -> np.ndarray | None:
+        """Array (3, n) [ambient, IR, red] o None. Default: device senza PPG."""
+        return None
+
+    async def reconnect(self):
+        """Riavvia la connessione (fallback per device perso). Default: ri-start."""
+        await self.start()
 
     def stop(self):
         pass
@@ -250,6 +285,8 @@ class SimulatedAcquirer(Acquirer):
     def __init__(self, mains: int):
         super().__init__()
         self.fs = 256
+        self.fs_ppg = 64
+        self.hr_hz = 1.1              # battito simulato ~66 bpm
         self.mains = mains
         self.t0 = time.time()
         self.iaf_true = 10.2          # picco alpha individuale "vero"
@@ -289,6 +326,19 @@ class SimulatedAcquirer(Acquirer):
             data[i] = x
         return data
 
+    def get_ppg_window(self, n: int) -> np.ndarray | None:
+        if self.state != "connected":
+            return None
+        now = time.time()
+        t = now - (np.arange(n)[::-1] / self.fs_ppg)
+        # Onda PPG plausibile: fondamentale del battito + 2a armonica, IR e red simili.
+        wave = (np.sin(2 * np.pi * self.hr_hz * t)
+                + 0.4 * np.sin(2 * np.pi * 2 * self.hr_hz * t))
+        amb = 10.0 + 1.0 * np.random.randn(n)
+        ir = 1000.0 + 50.0 * wave + 4.0 * np.random.randn(n)
+        red = 900.0 + 40.0 * wave + 4.0 * np.random.randn(n)
+        return np.vstack([amb, ir, red])
+
 
 class MuseAcquirer(Acquirer):
     """Acquisizione reale via BrainFlow. brainflow e' importato in modo lazy."""
@@ -301,15 +351,18 @@ class MuseAcquirer(Acquirer):
         self.board = None
         self.board_id = None
         self.eeg_channels = None
+        self._anc = None
         self._fail_count = 0
 
     async def start(self):
         self.state = "connecting"
         # Import lazy: BrainFlow non serve in --simulate.
-        from brainflow.board_shim import BoardShim, BrainFlowInputParams, BoardIds
+        from brainflow.board_shim import (BoardShim, BrainFlowInputParams, BoardIds,
+                                          BrainFlowPresets)
 
         board_map = {"MUSE_S": BoardIds.MUSE_S_BOARD, "MUSE_2": BoardIds.MUSE_2_BOARD}
         self.board_id = board_map.get(self.board_name, BoardIds.MUSE_S_BOARD).value
+        self._anc = BrainFlowPresets.ANCILLARY_PRESET
         params = BrainFlowInputParams()
         if self.serial_port:
             params.serial_port = self.serial_port
@@ -319,6 +372,16 @@ class MuseAcquirer(Acquirer):
         loop = asyncio.get_event_loop()
         self.board = BoardShim(self.board_id, params)
         await loop.run_in_executor(None, self.board.prepare_session)
+        # Abilita il sensore cardiaco PPG (+ 5° canale EEG): comando 'p50'. Non bloccante:
+        # se fallisce, l'EEG funziona comunque e il battito resta semplicemente assente.
+        try:
+            await loop.run_in_executor(None, lambda: self.board.config_board("p50"))
+            self.ppg_channels = BoardShim.get_ppg_channels(self.board_id, self._anc)
+            self.fs_ppg = BoardShim.get_sampling_rate(self.board_id, self._anc)
+            print(f"[muse] PPG abilitato (canali={self.ppg_channels}, fs={self.fs_ppg})")
+        except Exception as e:
+            self.ppg_channels = None
+            print(f"[muse] PPG non disponibile: {e}", file=sys.stderr)
         await loop.run_in_executor(None, self.board.start_stream)
         self.fs = BoardShim.get_sampling_rate(self.board_id)
         # NB Fase 5: validare che questo ordine combaci con TP9/AF7/AF8/TP10.
@@ -344,6 +407,31 @@ class MuseAcquirer(Acquirer):
             print(f"[muse] lettura fallita: {e}", file=sys.stderr)
             return None
 
+    def get_ppg_window(self, n: int) -> np.ndarray | None:
+        if self.board is None or not self.ppg_channels:
+            return None
+        try:
+            raw = self.board.get_current_board_data(n, self._anc)
+            if raw.shape[1] < int(self.fs_ppg):        # meno di ~1s di PPG
+                return None
+            return np.vstack([raw[c] for c in self.ppg_channels[:3]])
+        except Exception:
+            return None
+
+    async def reconnect(self):
+        """Hard reconnect BLE: chiude e riapre la sessione (fallback device perso)."""
+        self.state = "connecting"
+        loop = asyncio.get_event_loop()
+        if self.board is not None:
+            for fn in (self.board.stop_stream, self.board.release_session):
+                try:
+                    await loop.run_in_executor(None, fn)
+                except Exception:
+                    pass
+            self.board = None
+        self._fail_count = 0
+        await self.start()
+
     def stop(self):
         if self.board is not None:
             try:
@@ -365,6 +453,7 @@ class Hub:
         self.output_dir = output_dir
         self.engine_snapshot = {}
         self.muse_state = "disconnected"
+        self.heart_rate = None
 
     # --- gestione client --------------------------------------------------- #
     async def register(self, ws):
@@ -383,6 +472,7 @@ class Hub:
             "muse_state": self.muse_state,
             "frozen": self.frozen,
             "signal_quality": getattr(self, "signal_quality", {c: 0.0 for c in CHANNELS}),
+            "heart_rate": self.heart_rate,
             "ts": int(time.time() * 1000),
         }
         msg.update(self.engine_snapshot)
@@ -422,6 +512,11 @@ class Hub:
             await self._on_artwork(msg)
             return
 
+        if mtype == "print_unavailable":
+            await self._notify_operators({"type": "print_result", "ok": False,
+                                          "error": msg.get("reason", "Nessuna immagine da stampare")})
+            return
+
         if cmd == "freeze":
             self.frozen = not self.frozen
             print(f"[cmd] freeze -> {self.frozen}")
@@ -449,8 +544,29 @@ class Hub:
                                               "error": "Nessun client visual connesso"})
             else:
                 await self._send_many(vis, json.dumps({"cmd": "export"}))
+        elif cmd == "reconnect":
+            print("[cmd] reconnect — riavvio connessione sensore")
+            if self.on_reconnect:
+                asyncio.create_task(self._safe_reconnect())
+        elif cmd == "shutdown":
+            print("[cmd] shutdown — arresto del sistema")
+            # Avvisa i browser (chiudono le finestre), poi termina il processo:
+            # start.sh, vedendo il server uscire, chiude anche il kiosk sulla TV.
+            await self._send_many(list(self.clients.keys()),
+                                  json.dumps({"cmd": "shutdown"}))
+            await asyncio.sleep(0.4)
+            if self.on_shutdown:
+                self.on_shutdown()
 
     on_new_session = None
+    on_reconnect = None
+    on_shutdown = None
+
+    async def _safe_reconnect(self):
+        try:
+            await self.on_reconnect()
+        except Exception as e:
+            print(f"[reconnect] fallito: {e}", file=sys.stderr)
 
     async def _notify_operators(self, msg: dict):
         ops = [ws for ws, role in self.clients.items() if role == "operator"]
@@ -525,6 +641,8 @@ class Hub:
 async def dsp_loop(hub: Hub, acq: Acquirer, engine: FeatureEngine):
     win = int(acq.fs * WINDOW_SEC)
     period = 1.0 / BROADCAST_HZ
+    bpm_ema = None
+    last_bpm = 0.0
     while True:
         t0 = time.perf_counter()
         hub.muse_state = acq.state
@@ -534,6 +652,19 @@ async def dsp_loop(hub: Hub, acq: Acquirer, engine: FeatureEngine):
             engine.process(window, quality)
             hub.signal_quality = quality
             hub.engine_snapshot = engine.snapshot()
+        # Battito: stima ~1 Hz su una finestra PPG di ~5 s, con smoothing EMA.
+        if t0 - last_bpm >= 1.0:
+            last_bpm = t0
+            if acq.state != "connected":
+                bpm_ema = None
+                hub.heart_rate = None
+            else:
+                ppg = acq.get_ppg_window(int(acq.fs_ppg * 5))
+                if ppg is not None and ppg.shape[0] >= 2:
+                    bpm = estimate_bpm(ppg[1], acq.fs_ppg)        # riga 1 = canale IR
+                    if bpm is not None:
+                        bpm_ema = bpm if bpm_ema is None else 0.7 * bpm_ema + 0.3 * bpm
+                        hub.heart_rate = int(round(bpm_ema))
         await hub.broadcast_features()
         dt = time.perf_counter() - t0
         await asyncio.sleep(max(0.0, period - dt))
@@ -570,6 +701,16 @@ async def main():
     hub = Hub(printer=args.printer, output_dir=args.output_dir,
               print_options=args.print_options.split())
     hub.on_new_session = engine.reset_session
+    hub.on_reconnect = acq.reconnect
+
+    def _shutdown():
+        print("[neuralis] arresto richiesto dall'operatore.")
+        try:
+            acq.stop()                         # rilascia il sensore (BLE)
+        except Exception:
+            pass
+        os._exit(0)                            # termina -> start.sh chiude il kiosk
+    hub.on_shutdown = _shutdown
 
     if args.printer:
         chk = await asyncio.create_subprocess_exec(

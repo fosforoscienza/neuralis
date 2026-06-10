@@ -25,8 +25,10 @@ neuralis_visual.html      neuralis_operator.html
   broadcast WebSocket ~10 Hz, ricezione comandi, stampa via `lp` (CUPS).
 - **`neuralis_visual.html`** — visual p5.js fullscreen, nessun HUD; mappa le
   feature in colore/linee/spirale; export PNG hi-res su comando.
-- **`neuralis_operator.html`** — stato Muse, qualità segnale per canale,
-  parametri live, pulsanti operatore (CONGELA → STAMPA, NUOVA SESSIONE, PULISCI).
+- **`neuralis_operator.html`** — **check qualità** per ogni partecipante (4 canali +
+  battito; *Inizia* si sblocca a contatto buono per 3 s), poi la console: stato Muse,
+  qualità segnale, parametri live, **battito**, e pulsanti operatore (CONGELA → STAMPA,
+  NUOVO PARTECIPANTE, PULISCI; *Riconnetti sensore* nel check come fallback BLE).
 
 ## Mapping segnale → immagine
 
@@ -39,7 +41,8 @@ neuralis_visual.html      neuralis_operator.html
 ## Requisiti
 
 - macOS (Apple Silicon), Python 3.10+
-- Muse S Gen 2 / Muse 2 + dongle BLED112 (solo per l'hardware reale)
+- Muse S Gen 2 / Muse 2. Connessione via **Bluetooth del Mac** (lanciare dal **Terminale**
+  e concedere il permesso Bluetooth) oppure via **dongle BLED112**
 - Stampante fotografica via CUPS (es. Canon SELPHY); in assenza, fallback su PNG
 
 ## Installazione
@@ -69,6 +72,7 @@ NEURALIS_SIMULATE=0 NEURALIS_PRINTER="Canon_SELPHY" ./start.sh
 |---|---|---|
 | `NEURALIS_SIMULATE` | `1` | `0` = Muse reale |
 | `NEURALIS_PRINTER` | _(vuota)_ | nome stampante CUPS; vuota = salva solo PNG |
+| `NEURALIS_PRINT_OPTIONS` | _(fullbleed 10×15)_ | opzioni `lp`; default riempie il foglio Postcard |
 | `NEURALIS_MAINS` | `50` | frequenza di rete (50 IT / 60 US) |
 | `NEURALIS_TV_POS` | `1728,0` | origine della finestra kiosk = posizione della TV |
 | `NEURALIS_OPEN_BROWSERS` | `1` | `0` = avvia solo il server |
@@ -87,9 +91,10 @@ server diverso da `ws://127.0.0.1:8765`.
 
 ## Stato del progetto
 
-Completo e funzionante in `--simulate`: server, dashboard, visual e
-stampa/salvataggio del quadro. Resta da validare l'**hardware Muse reale**
-(ordine canali EEG e soglie di qualità) con device + dongle BLED112 collegati.
+Completo e funzionante in `--simulate`: server, dashboard (con check qualità + battito),
+visual e stampa/salvataggio del quadro. **Connessione EEG validata** sul Muse 2 reale (via
+Bluetooth del Mac, dal Terminale). Resta da validare sull'hardware il **battito PPG**
+(`config_board('p50')` → `tools/test_muse.py`) e, a regime, il **dongle BLED112**.
 
 Decisioni: stampa a due pulsanti (CONGELA → STAMPA), anteprima solo su TV,
-stampa 10×15 cm orizzontale @300 DPI, notch 50 Hz (rete IT).
+stampa 10×15 a **pieno foglio** (ritaglio 3:2 dal buffer 16:9 + `Postcard.Fullbleed`), notch 50 Hz (rete IT).

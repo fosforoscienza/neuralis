@@ -12,6 +12,7 @@
 #  2) Senza argomenti: usa i default dalle variabili d'ambiente:
 #       NEURALIS_SIMULATE=1        -> EEG simulato (0 = Muse reale)
 #       NEURALIS_PRINTER=""        -> stampante CUPS (vuoto = salva solo PNG)
+#       NEURALIS_PRINT_OPTIONS=... -> opzioni lp (default: pieno foglio 10x15 fullbleed)
 #       NEURALIS_MAINS=50          -> frequenza di rete (50 IT / 60 US)
 #       NEURALIS_PORT=8765         -> porta WebSocket
 #       NEURALIS_EXTRA=""          -> argomenti extra al server
@@ -27,6 +28,7 @@ cd "$SCRIPT_DIR"
 PYTHON="${PYTHON:-$SCRIPT_DIR/.venv/bin/python}"
 SIMULATE="${NEURALIS_SIMULATE:-1}"
 PRINTER="${NEURALIS_PRINTER:-}"
+PRINT_OPTIONS="${NEURALIS_PRINT_OPTIONS:--o media=Postcard.Fullbleed -o fit-to-page}"
 MAINS="${NEURALIS_MAINS:-50}"
 PORT="${NEURALIS_PORT:-8765}"
 TV_POS="${NEURALIS_TV_POS:-1728,0}"
@@ -56,7 +58,7 @@ if [[ $# -gt 0 ]]; then
 else
   SERVER_ARGS=(--mains "$MAINS" --port "$PORT")
   [[ "$SIMULATE" == "1" ]] && SERVER_ARGS+=(--simulate)
-  [[ -n "$PRINTER" ]] && SERVER_ARGS+=(--printer "$PRINTER")
+  [[ -n "$PRINTER" ]] && SERVER_ARGS+=(--printer "$PRINTER" --print-options "$PRINT_OPTIONS")
   # shellcheck disable=SC2206
   [[ -n "$EXTRA" ]] && SERVER_ARGS+=($EXTRA)
 fi

@@ -13,7 +13,7 @@ import websockets
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "ws://127.0.0.1:8765"
 REQUIRED = {"type", "warmth", "activation", "iaf", "asymmetry", "powers",
-            "signal_quality", "muse_state", "frozen", "ts"}
+            "signal_quality", "heart_rate", "muse_state", "frozen", "ts"}
 
 
 async def main():

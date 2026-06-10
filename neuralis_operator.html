@@ -58,7 +58,7 @@
   .num .u{color:var(--muted);font-size:14px;font-weight:500}
 
   /* azioni */
-  .actions{display:grid;grid-template-columns:1.3fr 1.3fr 1fr 1fr;gap:14px;margin-top:4px}
+  .actions{display:grid;grid-template-columns:1.3fr 1.3fr 1fr 1fr 1fr;gap:14px;margin-top:4px}
   button{font:inherit;font-weight:700;letter-spacing:1px;color:var(--txt);border:1px solid var(--line);
          background:var(--panel2);border-radius:14px;padding:22px 14px;cursor:pointer;transition:.15s;text-transform:uppercase}
   button:hover{transform:translateY(-1px);border-color:#3a4660}
@@ -76,6 +76,16 @@
   .mode-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-top:12px}
   .btn-mode{font-size:12px;padding:14px 10px;letter-spacing:1.5px}
   .btn-mode.active{border-color:#6ea8ff;color:#6ea8ff;background:linear-gradient(180deg,#0e1830,#091020)}
+
+  /* pulsante di spegnimento (alto a destra) */
+  .btn-power{width:42px;height:42px;min-width:42px;border-radius:50%;padding:0;font-size:19px;
+             display:flex;align-items:center;justify-content:center;line-height:1;
+             background:linear-gradient(180deg,#3a1620,#280d14);border:1px solid #7a2030;color:#ff8a98}
+  .btn-power:hover{border-color:#ff5d6c;color:#ff5d6c}
+  #shutdownOverlay{position:fixed;inset:0;z-index:200;background:var(--bg);
+                   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+  #shutdownOverlay b{font-size:30px;letter-spacing:1px}
+  #shutdownOverlay span{font-size:15px;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -86,6 +96,7 @@
     <div class="pills">
       <div class="pill"><span id="museDot" class="dot red"></span><span id="museTxt">Muse non connesso</span></div>
       <div class="pill"><span id="srvDot" class="dot red"></span><span id="srvTxt">Server offline</span></div>
+      <button id="btnPower" class="btn-power" title="Spegni il sistema (server, sensore, finestre)">⏻</button>
     </div>
   </header>
 
@@ -110,6 +121,7 @@
         <div class="num"><div class="k">IAF</div><div class="v"><span id="iafV">—</span><span class="u"> Hz</span></div></div>
         <div class="num"><div class="k">Asimmetria</div><div class="v" id="asymV">—</div></div>
         <div class="num"><div class="k">Seed firma</div><div class="v" id="seedV" style="font-size:22px">—</div></div>
+        <div class="num"><div class="k">Battito</div><div class="v"><span id="hrV">—</span><span class="u"> bpm</span></div></div>
       </div>
     </section>
 
@@ -125,9 +137,10 @@
       </h2>
       <div class="actions">
         <button id="btnFreeze" class="btn-freeze">Congela</button>
-        <button id="btnPrint" class="btn-print">Stampa</button>
-        <button id="btnNew" class="btn-sec">Nuova sessione</button>
+        <button id="btnPrint" class="btn-print" disabled>Stampa</button>
+        <button id="btnNew" class="btn-sec">Nuovo partecipante</button>
         <button id="btnClear" class="btn-sec">Pulisci</button>
+        <button id="btnReconnect" class="btn-sec">Riconnetti</button>
       </div>
       <div class="mode-row">
         <button id="btnFlowField" class="btn-mode active">Flow Field</button>
@@ -137,6 +150,7 @@
         <button id="btnNeural" class="btn-mode">Costellazione</button>
         <button id="btnVoronoi" class="btn-mode">Mosaico</button>
         <button id="btnMandala" class="btn-mode">Mandala</button>
+        <button id="btnFluid" class="btn-mode">Fluido</button>
       </div>
       <p class="hint" style="margin-top:12px">Flusso: <b>Congela</b> il quadro, mostralo e spiegalo, poi <b>Stampa</b>.</p>
       <div class="feedback" id="feedback"></div>
@@ -150,6 +164,7 @@
   const WS_URL = new URLSearchParams(location.search).get("ws") || "ws://127.0.0.1:8765";
 
   let ws = null, frozen = false, animMode = 'flowfield';
+  let shuttingDown = false;
 
   // ---- costruzione UI dinamica ----
   const chansEl = document.getElementById("chans");
@@ -178,6 +193,19 @@
     if(s==="connected"){ setDot(dot,"green",true); txt.textContent="Muse connesso"; }
     else if(s==="connecting"){ setDot(dot,"yellow",true); txt.textContent="Connessione…"; }
     else { setDot(dot,"red",false); txt.textContent="Muse non connesso"; }
+  }
+
+  function setBpm(hr){ $("hrV").textContent = (hr!=null) ? hr : "—"; }
+
+  // Stampa abilitata solo con sensore connesso, firma catturata e buon contatto:
+  // evita di stampare un quadro vecchio o un foglio vuoto a segnale assente.
+  function updatePrintBtn(m){
+    const q = m.signal_quality || {};
+    const mean = CHANNELS.reduce((s,c)=>s+(q[c] ?? 0),0) / CHANNELS.length;
+    const ok = m.muse_state==="connected" && !!m.signature && mean >= 0.5;
+    const b = $("btnPrint");
+    b.disabled = !ok;
+    b.title = ok ? "" : "Stampa disponibile solo con sensore connesso e quadro attivo";
   }
 
   function updateFeatures(m){
@@ -214,6 +242,8 @@
         $("bv_"+b).textContent = (v*100).toFixed(0)+"%";
       });
     }
+    setBpm(m.heart_rate);
+    updatePrintBtn(m);
     setFrozen(!!m.frozen);
   }
 
@@ -232,6 +262,15 @@
     else fb("Quadro salvato: "+(m.saved||"file"),"info");
   }
 
+  function onShutdown(){
+    shuttingDown = true;
+    const o = document.createElement("div");
+    o.id = "shutdownOverlay";
+    o.innerHTML = "<b>Sistema spento</b><span>Puoi chiudere questa finestra.</span>";
+    document.body.appendChild(o);
+    setTimeout(()=>{ try{ window.close(); }catch(e){} }, 400);
+  }
+
   // ---- WebSocket con riconnessione ----
   function connect(){
     ws = new WebSocket(WS_URL);
@@ -239,8 +278,10 @@
                       ws.send(JSON.stringify({type:"hello", role:"operator"})); };
     ws.onmessage = e=>{ let m; try{m=JSON.parse(e.data)}catch{ return; }
                         if(m.type==="features") updateFeatures(m);
-                        else if(m.type==="print_result") showPrintResult(m); };
-    ws.onclose = ()=>{ setDot($("srvDot"),"red",false); $("srvTxt").textContent="Server offline";
+                        else if(m.type==="print_result") showPrintResult(m);
+                        else if(m.cmd==="shutdown") onShutdown(); };
+    ws.onclose = ()=>{ if(shuttingDown) return;
+                       setDot($("srvDot"),"red",false); $("srvTxt").textContent="Server offline";
                        setMuseState("disconnected"); setTimeout(connect,1500); };
     ws.onerror = ()=>{ try{ws.close()}catch{} };
   }
@@ -251,12 +292,26 @@
 
   // ---- pulsanti (no <form>, solo handler JS) ----
   $("btnFreeze").addEventListener("click", ()=>{ if(send("freeze")) fb(frozen?"Riprendo…":"Congelo il quadro…","info"); });
-  $("btnPrint").addEventListener("click", ()=>{ if(send("print")) fb("Invio in stampa…","info"); });
+  $("btnPrint").addEventListener("click", ()=>{
+    if($("btnPrint").disabled){ fb("Stampa non disponibile: sensore non connesso.","err"); return; }
+    if(send("print")) fb("Invio in stampa…","info");
+  });
   $("btnClear").addEventListener("click", ()=>{ if(send("clear")) fb("Canvas pulito.","info"); });
-  $("btnNew").addEventListener("click", ()=>{
-    if(confirm("Nuova sessione: azzera la firma e pulisce il quadro. Procedere?")){
-      if(send("new_session")) fb("Nuova sessione avviata.","info");
+  $("btnPower").addEventListener("click", ()=>{
+    if(confirm("Spegnere Neuralis? Verranno chiusi server, sensore e finestre.")){
+      sendObj({cmd:"shutdown"}); fb("Spegnimento in corso…","info");
     }
+  });
+  // "Nuovo partecipante": azzera la firma e pulisce, pronto per la persona successiva.
+  $("btnNew").addEventListener("click", ()=>{
+    if(confirm("Nuovo partecipante: azzera la firma e pulisce il quadro. Procedere?")){
+      if(send("new_session")) fb("Nuova sessione: pronto per un nuovo partecipante.","info");
+    }
+  });
+
+  // Riconnetti sensore: hard reconnect BLE (fallback per device perso).
+  $("btnReconnect").addEventListener("click", ()=>{
+    if(sendObj({cmd:"reconnect"})) fb("Riconnessione del sensore in corso…","info");
   });
 
   function sendObj(obj){
@@ -272,6 +327,7 @@
     $("btnNeural").classList.toggle("active", m === "neural");
     $("btnVoronoi").classList.toggle("active", m === "voronoi");
     $("btnMandala").classList.toggle("active", m === "mandala");
+    $("btnFluid").classList.toggle("active", m === "fluid");
   }
   $("btnFlowField").addEventListener("click", ()=>{
     if(sendObj({cmd:"anim_mode",value:"flowfield"})){ setAnimMode("flowfield"); fb("Flow Field attivo.","info"); }
@@ -293,6 +349,9 @@
   });
   $("btnMandala").addEventListener("click", ()=>{
     if(sendObj({cmd:"anim_mode",value:"mandala"})){ setAnimMode("mandala"); fb("Mandala attivo.","info"); }
+  });
+  $("btnFluid").addEventListener("click", ()=>{
+    if(sendObj({cmd:"anim_mode",value:"fluid"})){ setAnimMode("fluid"); fb("Fluido attivo.","info"); }
   });
 
   connect();
